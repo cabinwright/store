@@ -23,6 +23,12 @@ jobs:
           ref: v1.1
           path: kia-menu
 
+      # kia-apps' signing test vectors, so the store's verifier is tested on the same bytes
+      - uses: actions/checkout@v4
+        with:
+          repository: hazptr/kia-apps
+          path: kia-apps
+
       # before setup-java: the runner's sdkmanager needs its default (newer) Java
       - name: Android SDK parts
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;29.0.2" "platforms;android-23" > /dev/null
@@ -60,7 +66,7 @@ jobs:
           KIAMENU_KEYSTORE_PASS: ${{ secrets.KIAMENU_KEYSTORE_PASS }}
         run: |
           KIA_MENU=$PWD/kia-menu sh build.sh
-          sh test/test.sh
+          KIA_APPS=$PWD/kia-apps sh test/test.sh
           mv dist/kia.store.zip "dist/kia.store-v$VERSION.zip"
 
       - uses: actions/upload-artifact@v4
