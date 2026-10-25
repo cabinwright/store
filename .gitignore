@@ -1,0 +1,5 @@
+dist/
+build/
+*.apk
+*.dex
+.DS_Store

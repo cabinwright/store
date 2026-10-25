@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="KiaTheme" parent="@android:style/Theme.Holo.NoActionBar">
+        <item name="android:windowBackground">@color/kia_bg</item>
+    </style>
+    <color name="kia_bg">#FF121214</color>
+</resources>

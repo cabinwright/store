@@ -1,0 +1,18 @@
+[nemesis]
+version=1.0
+id=kia.store
+name=App Store
+types=application,service
+
+[app.0]
+kind=apk
+path=app/kia-store.apk
+package=dev.kiastore
+component=dev.kiastore/.StoreActivity
+
+[service.0]
+name=helper
+kind=sh
+path=svc/helper.sh
+uid=root
+mode=restart

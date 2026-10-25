@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.kiastore"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="19" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- requests, downloads and results are shared with the root helper through /sdcard/kia-store -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@drawable/menu_icon"
+        android:allowBackup="false">
+        <activity
+            android:name=".StoreActivity"
+            android:theme="@style/KiaTheme"
+            android:screenOrientation="landscape"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- shows this app in Kia's All Menus (kia-menu launcher hook) -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="dev.kiamenu.category.ALL_MENUS" />
+            </intent-filter>
+            <meta-data android:name="dev.kiamenu.icon" android:resource="@drawable/menu_icon" />
+            <meta-data android:name="dev.kiamenu.icon_disabled" android:resource="@drawable/menu_icon_dis" />
+        </activity>
+    </application>
+</manifest>

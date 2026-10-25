@@ -1,0 +1,84 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # the kia-menu API the store app is built on, pinned to a release
+      - uses: actions/checkout@v4
+        with:
+          repository: hazptr/kia-menu
+          ref: v1.1
+          path: kia-menu
+
+      # before setup-java: the runner's sdkmanager needs its default (newer) Java
+      - name: Android SDK parts
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;29.0.2" "platforms;android-23" > /dev/null
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KIAMENU_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KIAMENU_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            # forks and PRs from them: a throwaway debug key
+            mkdir -p ~/.android
+            keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android \
+              -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          fi
+
+      - name: Version
+        run: |
+          VERSION=$(sed -n 's/^version=//p' package/NEMESIS.data)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match package/NEMESIS.data version $VERSION"
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          KIAMENU_KEYSTORE_PASS: ${{ secrets.KIAMENU_KEYSTORE_PASS }}
+        run: |
+          KIA_MENU=$PWD/kia-menu sh build.sh
+          sh test/test.sh
+          mv dist/kia.store.zip "dist/kia.store-v$VERSION.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kia.store-v${{ env.VERSION }}
+          path: dist/*.zip
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          NEMESIS package \`kia.store\` $VERSION: install \`kia.store-v$VERSION.zip\` with NEMESIS
+          (USB stick, or \`nemesis install --update <zip>\` over ADB).
+
+          The App Store shows up in All Menus with the kia-menu launcher hook installed. It installs
+          packages from the signed [kia-apps](https://github.com/hazptr/kia-apps) index.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/*.zip --title "kia-store $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

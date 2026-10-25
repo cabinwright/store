@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- follows Kia's day/night switch; KiaPage paints the same colours -->
+    <style name="KiaTheme" parent="@android:style/Theme.Holo.Light.NoActionBar">
+        <item name="android:windowBackground">@color/kia_bg</item>
+    </style>
+    <color name="kia_bg">#FFF0F0F0</color>
+</resources>
