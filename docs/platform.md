@@ -47,6 +47,8 @@ directory:
    and drops everything else.
 2. **A manifest of its own.** It writes a new `NEMESIS.data` from the signed index entry: id,
    version, name, and one `[app.N]` per APK (package and component from the APK itself).
+   Keep `component=`: NEMESIS Manager's Launch button (`nemesis pkg-launch`) starts that
+   activity, and it is how a new user first opens the store.
    There are no hooks, no services, no `execute`, and no `kind=sh` entries.
 3. **Install.** It installs that rebuilt zip, and records its SHA-256 next to the index's.
 
