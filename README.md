@@ -50,9 +50,26 @@ unless `--apply`).
 ## Build
 
 ```sh
-CABINWRIGHT_MENU=../menu sh build.sh     # -> dist/cabinwright.store.zip
-sh test/test.sh
+CABINWRIGHT_MENU=../menu sh build.sh     # -> dist/cabinwright.store.zip, and R8's name maps
+CABINWRIGHT_MENU=../menu sh test/test.sh
+sh ../menu/api/tools/lint.sh .           # ktlint, detekt, ShellCheck; --fix reformats the Kotlin
 ```
 
-Needs the Android SDK (build-tools 29.0.2, platform 23) and JDK 11. `DEBUG=1` also pins
-the test key in `keys/test/` for a local debug index (`tools/debug-index.py`).
+Needs the Android SDK's build-tools 29.0.2, JDK 11, and a checkout of
+[cabinwright/menu](https://github.com/cabinwright/menu) (CI pins a release tag): its
+`api/tools/fetch-tools.sh` brings the pinned Kotlin, R8, Android 4.4's `android.jar` and the
+lint tools, and its `build-app.sh` builds the app. `DEBUG=1` also pins the test key in
+`keys/test/` for a local debug index (`tools/debug-index.py`).
+
+Everything is Kotlin, compiled against Android 4.4's `android.jar` (API 19, the head unit's),
+so a newer call is a build error:
+
+- `app/` is built by the menu's `build-app.sh` with `common/` and the generated `Keys.kt`,
+  shrunk by R8 (`dist/cabinwright.store.map`).
+- `helper/` is a plain dex for `dalvikvm` (no framework classes), with `common/` and Kotlin's
+  stdlib shrunk into it by R8; `helper/proguard-rules.pro` keeps `Helper.main`, which
+  `svc/helper.sh` starts by name (`dist/cabinwright.store.helper.map`). It starts on every boot
+  and update on a slow head unit, so it stays small: no reflection, no Kotlin function
+  references (`::f`), and `parts()` (common/Text.kt) rather than Kotlin's general `split`.
+- `test/` runs `common/` and the helper's import of kia.store's record on the host JVM, against
+  the index repo's signing test vectors.
