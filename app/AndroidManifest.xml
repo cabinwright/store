@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.cabinwright.store"
+    package="app.cabinwright.store"
     android:versionCode="3"
     android:versionName="1.2.1">
 
@@ -27,15 +27,15 @@
             <!-- shows this app in All Menus (Cabinwright launcher hook) -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="dev.cabinwright.category.ALL_MENUS" />
+                <category android:name="app.cabinwright.category.ALL_MENUS" />
             </intent-filter>
-            <meta-data android:name="dev.cabinwright.icon" android:resource="@drawable/menu_icon" />
-            <meta-data android:name="dev.cabinwright.icon_disabled" android:resource="@drawable/menu_icon_dis" />
+            <meta-data android:name="app.cabinwright.icon" android:resource="@drawable/menu_icon" />
+            <meta-data android:name="app.cabinwright.icon_disabled" android:resource="@drawable/menu_icon_dis" />
         </activity>
         <!-- the requests the driver confirmed, for the root helper only (see RequestProvider) -->
         <provider
             android:name=".RequestProvider"
-            android:authorities="dev.cabinwright.store.requests"
+            android:authorities="app.cabinwright.store.requests"
             android:exported="true" />
     </application>
 </manifest>

@@ -7,7 +7,7 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
 
 | Part | What it is |
 |---|---|
-| `app/` | The store app (`dev.cabinwright.store`): the head unit's look via the Cabinwright API's `CarPage`, day and night. |
+| `app/` | The store app (`app.cabinwright.store`): the head unit's look via the Cabinwright API's `CarPage`, day and night. |
 | `helper/` | The root helper service. It does every install and removal, and checks everything again itself. |
 | `common/` | Shared by both: index signature check (RSA-3072, SHA256withRSA, pinned keys), sequence and expiry checks, JSON, versions. |
 | `keys/` | The pinned index public keys (`cabinwright-2026a`, backup `cabinwright-2026b`). |
@@ -16,7 +16,7 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
 ## How it stays safe
 
 - Nothing privileged happens without the driver's knowledge. The helper takes requests only
-  from the store app's read-only provider (`content://dev.cabinwright.store.requests/pending`), which
+  from the store app's read-only provider (`content://app.cabinwright.store.requests/pending`), which
   answers only root, system and adb, and the app lists only what the driver just confirmed.
   Other apps can't see or add requests; request files on the sdcard (App Store 1.0's way) are
   ignored and deleted. Each request runs once (by its uuid), and the app drops it once it sees

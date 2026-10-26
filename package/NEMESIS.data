@@ -7,8 +7,8 @@ types=application,service
 [app.0]
 kind=apk
 path=app/store.apk
-package=dev.cabinwright.store
-component=dev.cabinwright.store/.StoreActivity
+package=app.cabinwright.store
+component=app.cabinwright.store/.StoreActivity
 
 [service.0]
 name=helper

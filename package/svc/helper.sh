@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# helper: installs and removes NEMESIS packages for the Cabinwright app (dev.cabinwright.store).
+# helper: installs and removes NEMESIS packages for the Cabinwright app (app.cabinwright.store).
 # Verifying RSA signatures needs Java, so this starts helper.jar (a dex) with dalvikvm as
 # root. Dalvik writes the optimized dex to $ANDROID_DATA/dalvik-cache; /data/dalvik-cache
 # belongs to system, and a NEMESIS service runs as root without CAP_DAC_OVERRIDE, so the
@@ -26,4 +26,4 @@ echo "$(date) starting helper ($(grep CapEff /proc/self/status))"
 # exec, so NEMESIS stops the Java process itself: it kills a service's pid, and a child
 # of this shell would outlive it. To pick up an update the helper exits and svcmgr
 # restarts it (see Helper.reloadIfUpdated).
-exec dalvikvm -Xmx32m -cp "$ANDROID_DATA/helper.jar" dev.cabinwright.store.helper.Helper
+exec dalvikvm -Xmx32m -cp "$ANDROID_DATA/helper.jar" app.cabinwright.store.helper.Helper
