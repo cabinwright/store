@@ -1,5 +1,6 @@
 package app.cabinwright.store
 
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.text.TextUtils
@@ -9,21 +10,27 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import app.cabinwright.store.common.Index
-import app.cabinwright.store.common.Json
 import java.util.concurrent.Executors
 
 /**
- * The App Store: browse the signed index, read what a package does, install, update and
- * remove. Installing goes through the root helper (svc/helper.sh): this app downloads
- * and checks the zip, hands the helper a request (RequestProvider), and shows its progress.
+ * Cabinwright's store: browse the signed index, read what a package does, install, update and
+ * remove, and see and switch what each app may do. This app downloads and checks a zip, the
+ * driver confirms what it asks for, and the store's service (cabinwrightd, through the broker:
+ * [Daemon]) installs it; this app shows its progress.
  */
 class StoreActivity : StorePage() {
     private val ui = Handler()
+
+    /** Index refreshes, downloads and installs, which take a while. */
     private val work = Executors.newSingleThreadExecutor()
+
+    /** Short calls to the service: status, permissions, switches. */
+    private val calls = Executors.newSingleThreadExecutor()
     private lateinit var store: Store
     private lateinit var shelf: Shelf
     private lateinit var icons: Icons
     private lateinit var installer: Installer
+    private lateinit var permissions: Permissions
 
     private lateinit var title: TextView
     private lateinit var info: TextView
@@ -31,8 +38,7 @@ class StoreActivity : StorePage() {
     private lateinit var headerRight: LinearLayout
     private lateinit var content: FrameLayout
 
-    // what the screen shows besides the shelf, updated from the worker thread through ui.post
-    private var helperAlive = true
+    // what the screen shows besides the shelf, updated from the workers through ui.post
     private var loaded = false
     private var refreshing = false
     private var category: String? = null
@@ -40,7 +46,7 @@ class StoreActivity : StorePage() {
     private var job: Job? = null
     private var confirmFor: String? = null
 
-    /** The page to go back to after a recreate (a day/night switch recreates the activity). */
+    /** The page to go back to after a recreate (a day/night switch recreates the activity) or SHOW_APP. */
     private var restoreId: String? = null
     private var restoreName: String? = null
     private var restoreConfirm: String? = null
@@ -53,18 +59,7 @@ class StoreActivity : StorePage() {
 
     private val tick: Runnable = object : Runnable {
         override fun run() {
-            work.execute {
-                val inst = store.installed()
-                val mine = store.storeInstalled()
-                val alive = store.helperAlive()
-                ui.post {
-                    val changed = inst != shelf.installed || alive != helperAlive || mine != shelf.ours
-                    shelf.installed = inst
-                    shelf.ours = mine
-                    helperAlive = alive
-                    if (changed && job == null) render()
-                }
-            }
+            poll()
             ui.postDelayed(this, TICK_MS)
         }
     }
@@ -75,6 +70,7 @@ class StoreActivity : StorePage() {
         shelf = Shelf(store)
         icons = Icons(store)
         installer = Installer(store, { shelf.installed }) { j, status, percent -> progress(j, status, percent) }
+        permissions = Permissions(this, calls, ui, { render() }) { showBanner(BAD, it) }
         if (savedInstanceState != null) {
             restoreId = savedInstanceState.getString("shown")
             restoreName = savedInstanceState.getString("shown_name")
@@ -102,29 +98,59 @@ class StoreActivity : StorePage() {
 
         content = FrameLayout(this)
         page.addView(content, fill())
+        if (savedInstanceState == null) open(intent)
         render()
         work.execute { load() }
     }
 
-    /** Worker thread: the saved index, what's installed, what happened while the app was away. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        open(intent)
+    }
+
+    /** SHOW_APP: that package's page, or with no package the main page. */
+    private fun open(intent: Intent?) {
+        if (intent?.action != ACTION_SHOW_APP) return
+        val id = intent.getStringExtra(EXTRA_PACKAGE)
+        if (id.isNullOrEmpty()) {
+            show(null)
+            return
+        }
+        restoreId = id
+        restoreName = null
+        restoreConfirm = null
+        if (loaded) restorePage()
+        render()
+    }
+
+    /** Worker thread: the service's status, then the saved index (checked against its sequence too). */
     private fun load() {
-        store.clearOldRequests()
+        val r = Daemon.status()
+        r.value?.let { store.serviceSequence = it.sequence }
         store.loadSaved()
-        val inst = store.installed()
-        val mine = store.storeInstalled()
-        val alive = store.helperAlive()
-        val left = store.leftoverResults()
         ui.post {
-            shelf.installed = inst
-            shelf.ours = mine
-            helperAlive = alive
+            apply(r)
             loaded = true
-            showLeftovers(left)
+            showLeftovers(r.value)
             restorePage()
             render()
             val stale = System.currentTimeMillis() - store.lastChecked() > AUTO_REFRESH_MS
             if (store.index == null || store.indexExpired || stale) refresh()
         }
+    }
+
+    /** Asks the service for its status, off the main thread. */
+    private fun poll() {
+        calls.execute {
+            val r = Daemon.status()
+            ui.post { apply(r) }
+        }
+    }
+
+    /** A status reply to the shelf and the notices; redraws if anything shown changed. */
+    private fun apply(r: Daemon.Reply<Daemon.Status>) {
+        if (shelf.take(r) && loaded && job == null) render()
     }
 
     override fun onSaveInstanceState(out: Bundle) {
@@ -141,7 +167,7 @@ class StoreActivity : StorePage() {
     private fun restorePage() {
         val id = restoreId ?: return
         var a = store.index?.app(id)
-        if (a == null && shelf.has(id)) a = Shelf.unlistedApp(id, shelf.ours?.get(id) ?: restoreName)
+        if (a == null && shelf.has(id)) a = Shelf.unlistedApp(id, shelf.ours[id] ?: restoreName)
         if (a != null) {
             shown = a
             confirmFor = restoreConfirm
@@ -173,12 +199,8 @@ class StoreActivity : StorePage() {
         render()
         work.execute {
             val problem = store.refresh()
-            val inst = store.installed()
-            val mine = store.storeInstalled()
             ui.post {
                 refreshing = false
-                shelf.installed = inst
-                shelf.ours = mine
                 if (problem != null) showBanner(BAD, problem)
                 render()
             }
@@ -188,6 +210,7 @@ class StoreActivity : StorePage() {
     /** Opens an app's page (or, with null, goes back to browsing). */
     private fun show(a: Index.App?) {
         shown = a
+        permissions.forget()
         confirm(null)
     }
 
@@ -196,6 +219,9 @@ class StoreActivity : StorePage() {
         confirmFor = what
         render()
     }
+
+    /** The index's entry for the version of [s]'s app on the car, if it has one. */
+    private fun from(s: Store.Step): Index.Release? = shelf.installed[s.app.id]?.let { s.app.version(it) }
 
     /** Install or update [app]: works out the plan, then asks for confirmation if needed. */
     private fun askInstall(app: Index.App) {
@@ -214,7 +240,10 @@ class StoreActivity : StorePage() {
             render()
             return
         }
-        if (Risk(steps).any || steps.size > 1) confirm("install") else start(app, steps, remove = false)
+        // the confirmation is the driver's agreement: always for something new, and for an
+        // update that asks for more than the installed version did
+        val ask = steps.size > 1 || Risk(steps).any || steps.any { asksAgain(it, from(it)) }
+        if (ask) confirm("install") else start(app, steps, remove = false)
     }
 
     private fun askUpdateAll() {
@@ -224,14 +253,8 @@ class StoreActivity : StorePage() {
 
     private fun start(app: Index.App, steps: List<Store.Step>, remove: Boolean, all: Boolean = false) {
         if (job?.done == false) return
-        if (!helperAlive) {
-            showBanner(
-                BAD,
-                store.helperWaiting() ?: (
-                    "The installer service isn't running, so nothing can be installed. " +
-                        "Reinstall Cabinwright with NEMESIS Manager."
-                    ),
-            )
+        if (shelf.status == null) {
+            showBanner(BAD, (shelf.problem ?: Daemon.NOT_RUNNING) + " " + WAITS_FOR_SERVICE)
             return
         }
         val j = Job(app, steps, remove, shelf.has(app.id), all)
@@ -243,15 +266,31 @@ class StoreActivity : StorePage() {
         render()
         work.execute {
             installer.run(j)
-            val inst = store.installed()
-            val mine = store.storeInstalled()
+            val r = Daemon.status()
             ui.post {
-                shelf.installed = inst
-                shelf.ours = mine
+                apply(r)
                 j.done = true
                 val error = j.error
                 if (error != null) showBanner(BAD, error) else showBanner(GOOD, j.status)
                 job = null
+                permissions.forget()
+                render()
+            }
+        }
+    }
+
+    /** A call to the service from a button, then a fresh status; [success] goes in the banner. */
+    private fun act(success: String?, action: () -> Daemon.Reply<*>) {
+        calls.execute {
+            val r = action()
+            val st = Daemon.status()
+            ui.post {
+                if (r.error != null) {
+                    showBanner(BAD, r.message)
+                } else if (success != null) {
+                    showBanner(GOOD, success)
+                }
+                apply(st)
                 render()
             }
         }
@@ -275,16 +314,13 @@ class StoreActivity : StorePage() {
         }
     }
 
-    /** Results left over from before this screen opened, e.g. the App Store updating itself. */
-    private fun showLeftovers(left: Map<String, Map<String, Any?>>) {
-        for ((uuid, r) in left) {
-            val color = when (Json.str(r, "state")) {
-                "ok" -> GOOD
-                "failed" -> BAD
-                else -> null
-            } ?: continue
-            showBanner(color, Json.str(r, "message"))
-            store.forget(uuid)
+    /** How Cabinwright's own update went, when this app was replaced while following it. */
+    private fun showLeftovers(st: Daemon.Status?) {
+        val q = st?.let { store.unseenSelfUpdate(it) } ?: return
+        if (q.state == Daemon.OK) {
+            showBanner(GOOD, "Updated Cabinwright to " + q.version + ".")
+        } else {
+            showBanner(BAD, "Updating Cabinwright failed: " + q.message)
         }
     }
 
@@ -315,19 +351,22 @@ class StoreActivity : StorePage() {
         if (a != null) renderDetail(a) else renderBrowse()
     }
 
+    /** The service's notices, on the main page: not running, safe mode. */
+    private fun serviceNotes(col: LinearLayout) {
+        val problem = shelf.problem
+        if (problem != null && loaded) col.addView(note(WARN, "$problem $WAITS_FOR_SERVICE"))
+        if (shelf.status?.safeMode == true) {
+            col.addView(noteWithButton(WARN, SAFE_MODE, "Resume") { act(RESUMED) { Daemon.resumeTweaks() } })
+        }
+    }
+
     private fun renderBrowse() {
         title.text = "Cabinwright"
         val ups = store.updates(shelf.installed)
         browseHeader(ups)
         val col = column()
         content.addView(col)
-        if (!helperAlive && loaded) {
-            val why = store.helperWaiting() ?: (
-                "The installer service isn't answering. Installing needs it; " +
-                    "reinstall Cabinwright with NEMESIS if this stays."
-                )
-            col.addView(note(WARN, why))
-        }
+        serviceNotes(col)
         val index = store.index
         if (index == null) {
             noIndex(col)
@@ -377,6 +416,9 @@ class StoreActivity : StorePage() {
         if (ups.isNotEmpty()) headerRight.addView(text(" · " + count(ups.size, "update"), 15, ACCENT, false))
         info.setTextColor(MUTED)
         headerRight.addView(button(if (refreshing) "Refreshing…" else "Refresh") { refresh() })
+        headerRight.addView(
+            button("Settings") { startActivity(Intent(this, SettingsActivity::class.java)) },
+        )
     }
 
     /** No app list: why, and what the store installed, which can still be removed without one. */
@@ -424,7 +466,7 @@ class StoreActivity : StorePage() {
     /** Updates: one row per app with a newer version, and Update all. */
     private fun renderUpdates(list: LinearLayout, ups: List<Index.App>) {
         val running = job?.takeIf { it.all }
-        val off = job != null || store.indexExpired
+        val off = job != null || store.indexExpired || shelf.status == null
         val head = row()
         val what = if (running != null) {
             "Updating " + count(running.steps.size, "app") + ", one at a time"
@@ -487,6 +529,7 @@ class StoreActivity : StorePage() {
         }
         p.addView(message(msg))
         val steps = plan
+        if (steps != null) agreement(p, steps, shelf.installed)
         val go = if (steps.isNullOrEmpty()) {
             null
         } else {
@@ -538,7 +581,7 @@ class StoreActivity : StorePage() {
                     askInstall(a)
                 }
             }
-            enable(b, job == null && !s.blocked)
+            enable(b, job == null && !s.blocked && shelf.status != null)
             c.addView(b)
         }
         c.setOnClickListener { show(a) }
@@ -577,7 +620,7 @@ class StoreActivity : StorePage() {
 
     /** The title row's buttons on an app's page: its replacement, Remove, Install or Update. */
     private fun detailButtons(a: Index.App, s: Shelf.State, replacement: Index.App?) {
-        val busy = job != null
+        val busy = job != null || shelf.status == null
         if (replacement != null && !replacement.retired()) {
             val get = button("Get " + replacement.name + " instead") {
                 if (shelf.state(replacement).action != null) askInstall(replacement) else show(replacement)
@@ -609,6 +652,7 @@ class StoreActivity : StorePage() {
         } else if (confirmFor != null) {
             right.addView(confirmPanel(a))
         }
+        if (shelf.has(a.id) && a.id != Store.SELF && shelf.status != null) right.addView(permissions.panel(a))
         right.addView(reviewPanel(a, shelf, store.index != null))
         return right
     }
@@ -628,22 +672,10 @@ class StoreActivity : StorePage() {
                 e.message.orEmpty()
             }
         }
-        p.addView(
-            text(
-                if (remove) {
-                    "REMOVE"
-                } else if (update) {
-                    "BEFORE YOU UPDATE"
-                } else {
-                    "BEFORE YOU INSTALL"
-                },
-                15,
-                MUTED,
-                false,
-            ),
-        )
-        p.addView(message(msg.trim()))
+        p.addView(text(confirmTitle(remove, update), 15, MUTED, false))
+        if (msg.isNotBlank()) p.addView(message(msg.trim()))
         val steps = plan
+        if (steps != null) agreement(p, steps, shelf.installed)
         val go = when {
             remove -> button("Remove") { start(a, emptyList(), remove = true) }
             steps != null -> button(if (update) "Update" else "Install") { start(a, steps, remove = false) }
@@ -653,15 +685,22 @@ class StoreActivity : StorePage() {
         return p
     }
 
-    private companion object {
-        const val TICK_MS = 3000L
-        const val AUTO_REFRESH_MS = 6 * 3600 * 1000L
-        const val PERCENT = 100
-        const val CARD_DP = 380
-        const val UPDATE_DP = 560
-        const val GAP_DP = 10
+    companion object {
+        const val ACTION_SHOW_APP = "app.cabinwright.store.action.SHOW_APP"
+        const val EXTRA_PACKAGE = "package"
+
+        private const val SAFE_MODE = "Safe mode: system tweaks were turned off after repeated restarts."
+        private const val RESUMED = "Safe mode is off: system tweaks can run again."
+        private const val WAITS_FOR_SERVICE =
+            "Installing and removing wait for it; if this stays, reinstall Cabinwright with NEMESIS Manager."
+        private const val TICK_MS = 3000L
+        private const val AUTO_REFRESH_MS = 6 * 3600 * 1000L
+        private const val PERCENT = 100
+        private const val CARD_DP = 380
+        private const val UPDATE_DP = 560
+        private const val GAP_DP = 10
 
         /** The Updates tab, kept in [category] beside the real categories. */
-        const val UPDATES = "*updates"
+        private const val UPDATES = "*updates"
     }
 }

@@ -1,7 +1,6 @@
 package app.cabinwright.store
 
 import app.cabinwright.store.common.Index
-import app.cabinwright.store.common.Json
 import java.io.IOException
 import kotlin.math.max
 import kotlin.math.min
@@ -26,9 +25,9 @@ internal class Job(
 }
 
 /**
- * Runs a [Job] on the worker thread: downloads, verifies and hands each step to the helper
- * in order, and follows the helper's results. [update] reports progress (it posts to the
- * UI thread); [installed] is what the screen last saw installed.
+ * Runs a [Job] on the worker thread: downloads and checks each step's zip, asks the store's
+ * service to install it, in order, and follows the service's status. [update] reports
+ * progress (it posts to the UI thread); [installed] is what the screen last saw installed.
  */
 internal class Installer(
     private val store: Store,
@@ -61,9 +60,9 @@ internal class Installer(
                 return
             }
             update(j, "Verifying $label", -1)
-            val r = ask(j, Store.installRequest(s), label)
+            val ok = ask(j, { Daemon.install(s.app.id, s.version.version) }, label)
             store.deleteDownload(s.app.id, s.version.version)
-            if (r == null) {
+            if (!ok) {
                 stopped(j, i)
                 return
             }
@@ -97,75 +96,65 @@ internal class Installer(
 
     private fun runRemove(j: Job) {
         update(j, "Removing " + j.app.name, -1)
-        if (ask(j, Store.uninstallRequest(j.app.id), j.app.name) !=
-            null
-        ) {
+        if (ask(j, { Daemon.uninstall(j.app.id) }, j.app.name)) {
             update(j, "Removed " + j.app.name + ".", PERCENT)
         }
     }
 
-    /** Submits a request and follows its result; null (with j.error set) if it failed. */
-    private fun ask(j: Job, request: Map<String, Any?>, label: String): Map<String, Any?>? {
-        val uuid = try {
-            store.submit(request)
-        } catch (e: IOException) {
-            j.error = "Can't hand the request to the installer: " + e.message
-            return null
+    /** Starts a request with the service and follows it; false (with j.error set) if it failed. */
+    private fun ask(j: Job, start: () -> Daemon.Reply<String>, label: String): Boolean {
+        val r = start()
+        val id = r.value
+        if (id.isNullOrEmpty()) {
+            j.error = label + ": " + r.message
+            return false
         }
-        try {
-            return follow(j, uuid, label)
-        } finally {
-            // seen, failed or given up on: either way it must never run later
-            store.drop(uuid)
-        }
+        return follow(j, id, label)
     }
 
-    private fun follow(j: Job, uuid: String, label: String): Map<String, Any?>? {
+    /** Polls the service's status until the request is done, or the service is gone too long. */
+    private fun follow(j: Job, id: String, label: String): Boolean {
         val start = System.currentTimeMillis()
+        var lastSeen = start
         while (true) {
             try {
                 Thread.sleep(FOLLOW_MS)
             } catch (ignored: InterruptedException) {
-                return null
+                return false
             }
-            val r = store.result(uuid)
-            // the helper has it (and runs a uuid only once): no need to offer it again
-            if (r != null) store.drop(uuid)
-            val state = if (r == null) null else Json.str(r, "state")
-            if (r != null && (state == "ok" || state == "failed")) return finished(j, uuid, label, r)
-            if (r != null) update(j, Json.str(r, "message"), -1)
-            val stuck = stuck(r == null, start, label)
+            val now = System.currentTimeMillis()
+            val st = Daemon.status()
+            val q = st.value?.request(id)
+            if (q != null) {
+                lastSeen = now
+                if (q.done) return finished(j, q, label)
+                update(j, q.step.ifEmpty { q.message }.ifEmpty { "Working" }, -1)
+            }
+            val stuck = when {
+                now - lastSeen > LOST_MS && st.value == null -> label + ": " + st.message
+                now - lastSeen > LOST_MS -> "$label: the store's service lost track of the request."
+                now - start > GIVE_UP_MS -> "$label: the store's service didn't finish in 20 minutes."
+                else -> null
+            }
             if (stuck != null) {
                 j.error = stuck
-                return null
+                return false
             }
         }
     }
 
-    /** A request the helper is done with: its result, or null with j.error saying why it failed. */
-    private fun finished(j: Job, uuid: String, label: String, r: Map<String, Any?>): Map<String, Any?>? {
-        store.forget(uuid)
-        if (Json.str(r, "state") == "ok") return r
-        val log = Json.str(r, "log")
-        j.error = label + ": " + Json.str(r, "message") + if (log.isEmpty()) "" else "\n" + lastLines(log, LOG_LINES)
-        return null
-    }
-
-    /** Why to stop waiting for a request ([unseen]: the helper hasn't taken it up yet), or null. */
-    private fun stuck(unseen: Boolean, start: Long, label: String): String? {
-        val age = System.currentTimeMillis() - start
-        return when {
-            unseen && age > PICKUP_MS && !store.helperAlive() ->
-                "The installer service didn't pick up the request. Is it running?"
-            age > GIVE_UP_MS -> "$label: the installer didn't finish in 20 minutes."
-            else -> null
-        }
+    /** A finished request: true if it worked, else false with j.error saying why. */
+    private fun finished(j: Job, q: Daemon.Request, label: String): Boolean {
+        if (q.state == Daemon.OK) return true
+        val msg = q.message.ifEmpty { "it failed" }
+        j.error = label + ": " + msg + if (q.log.isEmpty()) "" else "\n" + lastLines(q.log, LOG_LINES)
+        return false
     }
 
     private companion object {
         const val PERCENT = 100
         const val FOLLOW_MS = 700L
-        const val PICKUP_MS = 30000L
+        const val LOST_MS = 60000L
         const val GIVE_UP_MS = 20 * 60 * 1000L
         const val LOG_LINES = 3
     }

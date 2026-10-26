@@ -7,22 +7,19 @@ import android.util.Log
 import app.cabinwright.api.ui.probeHidden
 import app.cabinwright.store.common.Index
 import app.cabinwright.store.common.IndexCheck
-import app.cabinwright.store.common.Json
 import app.cabinwright.store.common.Keys
-import app.cabinwright.store.common.NemesisData
 import app.cabinwright.store.common.Versions
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.util.Locale
-import java.util.UUID
 
 /**
- * Everything the App Store does besides drawing: the index (fetch, verify, remember), what
- * is installed, the helper's heartbeat, downloads, and requests to the helper. Methods
- * that touch the network or files run on a background thread.
+ * What Cabinwright does besides drawing and talking to its service ([Daemon]): the index
+ * (fetch, verify, remember), install plans, and downloads. The service reads the index and
+ * the downloads from [sd] and checks them again itself. Methods that touch the network or
+ * files run on a background thread.
  */
 internal class Store(val context: Context) {
     val sd = File(Environment.getExternalStorageDirectory(), "cabinwright/store")
@@ -35,6 +32,9 @@ internal class Store(val context: Context) {
     @Volatile var indexProblem: String? = null
 
     @Volatile var indexExpired = false
+
+    /** The newest index the service has accepted (from its status), so a rollback is refused here too. */
+    @Volatile var serviceSequence = -1L
 
     // ------------------------------------------------------------------ the index
 
@@ -63,7 +63,7 @@ internal class Store(val context: Context) {
 
     private fun seqKey(): String = if (debug()) "debug_sequence" else "sequence"
 
-    fun lastSequence(): Long = prefs.getLong(seqKey(), -1)
+    fun lastSequence(): Long = maxOf(prefs.getLong(seqKey(), -1), serviceSequence)
 
     fun lastChecked(): Long = prefs.getLong(seqKey() + "_checked", 0)
 
@@ -149,68 +149,17 @@ internal class Store(val context: Context) {
         }
     }
 
-    // ------------------------------------------------------------------ the car
-
-    /** Installed NEMESIS packages: id -> version (from their NEMESIS.data). */
-    fun installed(): Map<String, String> {
-        val out = LinkedHashMap<String, String>()
-        val ids = NEMESIS_APPS.list()
-        if (ids != null) {
-            for (id in ids) {
-                try {
-                    val d =
-                        NemesisData(String(read(File(NEMESIS_APPS, "$id/NEMESIS.data"), MAX_STATUS), Charsets.UTF_8))
-                    out[id] = d.version().ifEmpty { "0" }
-                } catch (ignored: IOException) {
-                    // not a package directory
-                }
-            }
-            return out
-        }
-        // can't list NEMESIS's directory: use what the helper last reported
-        val st = helperStatus() ?: return out
-        for (o in Json.list(st, "packages")) {
-            val p = Json.asObject(o) ?: continue
-            out[Json.str(p, "id")] = Json.str(p, "version")
-        }
-        return out
-    }
-
     /**
-     * Packages the helper installed and so will remove, whether or not the index still lists
-     * them: id -> name. Null if the helper doesn't say (not running, or older than 1.1).
+     * The newest finished request for Cabinwright itself that this app hasn't reported yet
+     * (updating it replaces this app, and its data, mid-request); every finished request
+     * counts as reported from now on. The service keeps the last 20.
      */
-    fun storeInstalled(): Map<String, String>? {
-        val st = helperStatus()
-        if (st == null || st["store_installed"] !is List<*>) return null
-        val names = HashMap<String, String>()
-        for (o in Json.list(st, "packages")) {
-            val p = Json.asObject(o) ?: continue
-            names[Json.str(p, "id")] = Json.str(p, "name")
-        }
-        val out = LinkedHashMap<String, String>()
-        for (id in Json.strings(st, "store_installed")) {
-            val n = names[id]
-            out[id] = if (n.isNullOrEmpty()) id else n
-        }
-        return out
+    fun unseenSelfUpdate(st: Daemon.Status): Daemon.Request? {
+        val seen = prefs.getStringSet(SEEN, null) ?: emptySet()
+        val q = st.requests.lastOrNull { it.done && it.pkg == SELF && it.id !in seen }
+        prefs.edit().putStringSet(SEEN, st.requests.filter { it.done }.map { it.id }.toHashSet()).apply()
+        return q
     }
-
-    fun helperStatus(): Map<String, Any?>? = readJson(File(sd, "status.json"))
-
-    /** True if the helper wrote its heartbeat recently and isn't waiting (see helperWaiting). */
-    fun helperAlive(): Boolean {
-        val st = helperStatus()
-        if (st == null || Json.str(st, "waiting").isNotEmpty()) return false
-        val age = System.currentTimeMillis() / 1000 - Json.num(st, "time", 0)
-        return age >= -HELPER_STALE_S && age <= HELPER_STALE_S
-    }
-
-    /**
-     * Why the helper is idle, or null: while the previous package's (kia.store's) helper
-     * still runs, ours waits for it rather than act alongside it.
-     */
-    fun helperWaiting(): String? = helperStatus()?.let { Json.str(it, "waiting") }?.ifEmpty { null }
 
     // ------------------------------------------------------------------ plans
 
@@ -235,6 +184,14 @@ internal class Store(val context: Context) {
     ) {
         if (!visiting.add(app.id)) planError(app.name + " has a circular requirement.")
         if (v.review.execute) planError(app.name + " is an autorun package; the store won't install it.")
+        if (v.tier !in TIERS) {
+            planError(
+                app.name + " " + v.version + " doesn't say what kind of package it is; the store won't install it.",
+            )
+        }
+        if (v.tier == "system" && app.id !in SYSTEM_IDS) {
+            planError(app.name + " is a system package, which only Cabinwright itself may be.")
+        }
         if (app.retired()) planError(app.name + " is no longer offered: " + app.retiredReason())
         for (r in v.requires) {
             val req = Versions.requirement(r) ?: planError(app.name + " has a requirement the store can't read: " + r)
@@ -273,7 +230,7 @@ internal class Store(val context: Context) {
 
     /**
      * One plan for several updates: each app after the ones its new version requires (and
-     * after anything missing it needs, installed first), the App Store itself last, since
+     * after anything missing it needs, installed first), Cabinwright itself last, since
      * updating it ends this app.
      */
     fun planUpdates(apps: List<Index.App>, installed: Map<String, String>): List<Step> {
@@ -317,7 +274,7 @@ internal class Store(val context: Context) {
         order.add(a)
     }
 
-    // ------------------------------------------------------------------ downloads and requests
+    // ------------------------------------------------------------------ downloads
 
     fun download(s: Step, p: Net.Progress): File {
         val dir = File(sd, "downloads")
@@ -340,76 +297,30 @@ internal class Store(val context: Context) {
         throw IOException(problem)
     }
 
-    /**
-     * Hands a request to the helper; returns its id. It stays in private storage, where only
-     * RequestProvider (root, system and adb only) shows it to the helper, until drop().
-     */
-    fun submit(request: Map<String, Any?>): String {
-        val dir = requestDir(context)
-        dir.mkdirs()
-        val uuid = UUID.randomUUID().toString()
-        val r = LinkedHashMap(request)
-        r["uuid"] = uuid
-        val name = String.format(Locale.US, "%013d-%s.json", System.currentTimeMillis(), uuid)
-        val tmp = File(dir, "$name.tmp")
-        write(tmp, Json.write(r).toByteArray(Charsets.UTF_8))
-        if (!tmp.renameTo(File(dir, name))) throw IOException("Can't write the request.")
-        return uuid
-    }
-
-    /** Takes a request back: once its result is in, or when the app gives up on it. */
-    fun drop(uuid: String) {
-        requestDir(context).listFiles()?.filter { it.name.endsWith("-$uuid.json") }?.forEach { it.delete() }
-    }
-
-    /**
-     * Request files on the sdcard are from App Store 1.0. Nothing reads them any more (any
-     * app could have written them); clear them away.
-     */
-    fun clearOldRequests() {
-        val dir = File(sd, "requests")
-        dir.listFiles()?.forEach { it.delete() }
-        dir.delete()
-    }
-
-    fun result(uuid: String): Map<String, Any?>? = readJson(File(sd, "results/$uuid.json"))
-
-    fun forget(uuid: String) {
-        File(sd, "results/$uuid.json").delete()
-    }
-
+    /** Once the service is done with a download, installed or not. */
     fun deleteDownload(id: String, version: String) {
         File(sd, "downloads/$id-$version.zip").delete()
     }
 
-    /** Results left from before (for example across the App Store updating itself): uuid -> result. */
-    fun leftoverResults(): Map<String, Map<String, Any?>> {
-        val out = LinkedHashMap<String, Map<String, Any?>>()
-        val names = File(sd, "results").list() ?: return out
-        for (n in names.filter { it.endsWith(".json") }) {
-            val uuid = n.removeSuffix(".json")
-            result(uuid)?.let { out[uuid] = it }
-        }
-        return out
-    }
-
     companion object {
-        const val VERSION = "1.2.1"
+        const val VERSION = "1.0"
         const val SELF = "cabinwright.store"
         const val INDEX_URL = "https://cabinwright.github.io/apps/"
 
+        /** The tiers of design.md "Packages and tiers", and the only ids the system tier allows. */
+        val TIERS = setOf("app", "tweaks", "system")
+        val SYSTEM_IDS = setOf(SELF)
+
         /** Root-only to create; its first line is the debug index's base URL. */
         val DEBUG_INDEX = File("/data/nemesis/cabinwright/store/debug-index")
-        val NEMESIS_APPS = File("/data/nemesis/apps")
-        const val HELPER_STALE_S = 60L
         const val MAX_INDEX = 4 shl 20
         const val MAX_ZIP = 64L shl 20
         private const val MAX_SIG = 64 shl 10
-        private const val MAX_STATUS = 1 shl 20
         private const val MAX_SMALL = 4096
         private const val BUFFER = 16384
 
         const val TAG = "CabinwrightStore"
+        private const val SEEN = "seen_requests"
 
         /** An expired index, in plain words: installs wait for a fresh one, removals don't. */
         const val OUT_OF_DATE = "The app list is out of date: connect to the internet to refresh it."
@@ -420,29 +331,12 @@ internal class Store(val context: Context) {
             (sp.getMethod("get", String::class.java).invoke(null, "ro.build.product") as String?)?.ifEmpty { null }
         }
 
-        /** Where confirmed requests wait for the helper (RequestProvider serves them). */
-        fun requestDir(context: Context): File = File(context.filesDir, "requests")
-
-        fun installRequest(s: Step): Map<String, Any?> =
-            Json.of("op" to "install", "id" to s.app.id, "version" to s.version.version)
-
-        fun uninstallRequest(id: String): Map<String, Any?> = Json.of("op" to "uninstall", "id" to id)
-
         private fun planError(m: String): Nothing = throw PlanError(m)
 
         private fun sameBytes(f: File, b: ByteArray): Boolean = try {
             read(f, MAX_INDEX).contentEquals(b)
         } catch (ignored: IOException) {
             false
-        }
-
-        /** A JSON object file (status, results), or null if it's missing or not one. */
-        private fun readJson(f: File): Map<String, Any?>? = try {
-            Json.parseObject(String(read(f, MAX_STATUS), Charsets.UTF_8))
-        } catch (ignored: IOException) {
-            null
-        } catch (ignored: IllegalArgumentException) {
-            null
         }
 
         fun read(f: File, max: Int): ByteArray {

@@ -62,7 +62,7 @@ cp -R "$ROOT/app/." "$STAGE/app/"
 cp -R "$ROOT/common/src/." "$STAGE/app/src/"
 cp -R "$STAGE/gen/." "$STAGE/app/src/"
 CABINWRIGHT_MAP=$ROOT/dist/cabinwright.store.map \
-    sh "$TOOLS/build-app.sh" --ui "$STAGE/app" "$STAGE/pkg/app/store.apk" >/dev/null
+    sh "$TOOLS/build-app.sh" --ui --broker "$STAGE/app" "$STAGE/pkg/app/store.apk" >/dev/null
 
 # the helper: no framework classes, as a dex in a jar for dalvikvm. Compiled against
 # android-19.jar too, so it only uses the Java classes Android 4.4 has; Kotlin's stdlib is

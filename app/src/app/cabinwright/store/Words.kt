@@ -1,6 +1,7 @@
 package app.cabinwright.store
 
 import app.cabinwright.api.ui.CarPage
+import app.cabinwright.store.common.Grants
 import app.cabinwright.store.common.Index
 import app.cabinwright.store.common.Versions
 import java.util.Locale
@@ -139,3 +140,85 @@ internal fun installMessage(steps: List<Store.Step>, author: String): String {
     if (risk.any) msg.append("Only install it if you trust ").append(author).append('.')
     return msg.toString()
 }
+
+/** A capability in plain words, as "<App> wants to …" ends. */
+internal fun capabilityWords(cap: String): String = when (cap) {
+    "tweaks" -> "see and switch your tweaks"
+    "logs" -> "read the car's logs"
+    "settings" -> "change system settings"
+    "root" -> "run commands as root"
+    else -> "use \"$cap\""
+}
+
+/** A capability as a line's title: "Read the car's logs". */
+internal fun capabilityTitle(cap: String): String = capabilityWords(cap).replaceFirstChar { it.uppercaseChar() }
+
+/** Root is always red; the rest are plain. */
+internal fun capabilityColor(cap: String): Int = if (cap == "root") CarPage.BAD else CarPage.IDLE
+
+/** A tweak need's colour: root red, system files amber, the rest plain. */
+private fun needColor(need: String): Int = when {
+    need == "root" -> CarPage.BAD
+    need.startsWith("file:") -> CarPage.WARN
+    else -> CarPage.IDLE
+}
+
+/** What a version's tier means for the car. */
+internal fun tierLine(tier: String): Pair<Int, String> = when (tier) {
+    "app" -> CarPage.GOOD to "Apps only: nothing runs as root"
+    "tweaks" ->
+        CarPage.WARN to
+            "Tweaks: changes the head unit, only in the ways listed here, and undoes them when removed"
+    "system" -> CarPage.BAD to "System package: full control of the head unit"
+    else -> CarPage.BAD to "Doesn't say what kind of package it is"
+}
+
+/**
+ * What installing [s] asks the driver to agree to: its tier, each capability and each tweak's
+ * needs, with their reasons. With [from] (the installed version, from the index) only what's
+ * new since then.
+ */
+internal fun agreementLines(s: Store.Step, from: Index.Release?): List<Pair<Int, String>> {
+    val v = s.version
+    val out = ArrayList<Pair<Int, String>>()
+    if (from == null || from.tier != v.tier) out.add(tierLine(v.tier))
+    for ((cap, reason) in v.capabilities) {
+        if (from != null && from.capabilities.containsKey(cap)) continue
+        out.add(capabilityColor(cap) to capabilityTitle(cap) + if (reason.isEmpty()) "" else ": " + sentence(reason))
+    }
+    for ((tweak, needs) in v.review.tweaks) {
+        val had = from?.review?.tweaks?.get(tweak)?.map { it.first }?.toSet() ?: emptySet()
+        for ((need, reason) in needs) {
+            if (need in had) continue
+            out.add(needColor(need) to "Tweak $tweak: " + sentence(reason.ifEmpty { need }) + " ($need)")
+        }
+    }
+    return out
+}
+
+/** Whether installing [s] over [from] needs the driver's agreement again: new, or anything new to allow. */
+internal fun asksAgain(s: Store.Step, from: Index.Release?): Boolean =
+    from == null || agreementLines(s, from).isNotEmpty()
+
+/** A grant's state in plain words (design.md "Capabilities"; the states are common's Grants). */
+internal fun grantWords(cap: String, state: String): String = when (state) {
+    Grants.ALWAYS -> "Always allowed"
+    Grants.SESSION -> "Allowed until the car is turned off"
+    Grants.AGREED -> if (cap in Grants.PROMPTING) "Asks before it's used" else "Allowed"
+    Grants.DENY -> "Denied"
+    Grants.OFF -> "Off"
+    else -> state
+}
+
+/** When a capability was last used: the service sends a time (seconds or milliseconds) or words. */
+internal fun lastUsed(v: Any?): String {
+    val t = (v as? Number)?.toLong()
+    return when {
+        t != null && t > 0 -> "used " + ago(if (t < MS_FROM) t * 1000 else t)
+        v is String && v.isNotEmpty() -> "used $v"
+        else -> "not used yet"
+    }
+}
+
+/** Times below this are in seconds (it's 1973 in milliseconds). */
+private const val MS_FROM = 100_000_000_000L

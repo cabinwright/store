@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="app.cabinwright.store"
-    android:versionCode="3"
-    android:versionName="1.2.1">
+    android:versionCode="1"
+    android:versionName="1.0">
 
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="19" />
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- downloads, results and status are shared with the root helper through /sdcard/cabinwright/store;
-         requests are not: the helper reads them from RequestProvider -->
+    <!-- the index and downloads go to /sdcard/cabinwright/store, where the store's service reads them -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <application
@@ -29,13 +28,27 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="app.cabinwright.category.ALL_MENUS" />
             </intent-filter>
+            <!-- another app's page in the store: extra "package", a NEMESIS id -->
+            <intent-filter>
+                <action android:name="app.cabinwright.store.action.SHOW_APP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
             <meta-data android:name="app.cabinwright.icon" android:resource="@drawable/menu_icon" />
             <meta-data android:name="app.cabinwright.icon_disabled" android:resource="@drawable/menu_icon_dis" />
         </activity>
-        <!-- the requests the driver confirmed, for the root helper only (see RequestProvider) -->
-        <provider
-            android:name=".RequestProvider"
-            android:authorities="app.cabinwright.store.requests"
-            android:exported="true" />
+        <activity
+            android:name=".SettingsActivity"
+            android:theme="@style/CarTheme"
+            android:screenOrientation="landscape"
+            android:exported="false" />
+        <!-- the broker's permission prompts: started only by the store's service, as root -->
+        <activity
+            android:name=".PromptActivity"
+            android:theme="@style/CarTheme"
+            android:screenOrientation="landscape"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="" />
     </application>
 </manifest>

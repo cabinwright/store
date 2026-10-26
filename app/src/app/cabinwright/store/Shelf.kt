@@ -5,16 +5,45 @@ import app.cabinwright.store.common.Versions
 
 /**
  * What the car has, set against what the index offers: what can be installed, updated or
- * removed. Read and written on the UI thread; the worker hands it fresh lists through ui.post.
+ * removed, from the service's status. Read and written on the UI thread; the workers hand it
+ * fresh replies through ui.post.
  */
 internal class Shelf(private val store: Store) {
+    /** What the service says is installed: id -> version. Empty until it answers. */
     var installed: Map<String, String> = HashMap()
 
-    /** What the helper installed (id -> name), so it can always be removed; null if unknown. */
-    var ours: Map<String, String>? = null
+    /** What the store installed (id -> name), so it can always be removed. */
+    var ours: Map<String, String> = HashMap()
 
-    /** ro.build.product; null if unknown. */
-    val firmware: String? = Store.firmware()
+    /** The service's firmware string, else ro.build.product; null if unknown. */
+    var firmware: String? = Store.firmware()
+
+    /** The service's last status; null while it isn't answering. */
+    var status: Daemon.Status? = null
+
+    /** Why there's no status, once the service has been asked. */
+    var problem: String? = null
+
+    /** Takes in a status reply; true if anything the screens show changed. */
+    fun take(r: Daemon.Reply<Daemon.Status>): Boolean {
+        val before = shown()
+        val st = r.value
+        status = st
+        problem = when {
+            st != null -> null
+            r.notRunning -> Daemon.NOT_RUNNING
+            else -> r.message
+        }
+        if (st != null) {
+            installed = st.installed()
+            ours = st.ours()
+            firmware = st.firmware.ifEmpty { null } ?: Store.firmware()
+            store.serviceSequence = st.sequence
+        }
+        return shown() != before
+    }
+
+    private fun shown(): List<Any?> = listOf(installed, ours, problem, status?.safeMode, status?.lockdown)
 
     /** How a card's status line reads: the colours are the page's. */
     enum class Tone { MUTED, ACCENT, GOOD, WARN, BAD }
@@ -33,22 +62,14 @@ internal class Shelf(private val store: Store) {
     fun offered(a: Index.App): Boolean = listed(a) && !a.retired()
 
     /**
-     * Removal never depends on the index: what the helper says it installed can always be
-     * removed (it checks its own record again), the App Store itself never.
+     * Removal never depends on the index: what the service says the store installed can always
+     * be removed (it checks its own record again), Cabinwright itself never.
      */
-    fun removable(id: String): Boolean {
-        if (!has(id) || id == Store.SELF) return false
-        // a helper that doesn't say what it installed: 1.0's rule, listed apps only
-        val ours = ours ?: return store.index?.app(id) != null
-        return ours.containsKey(id)
-    }
+    fun removable(id: String): Boolean = has(id) && id != Store.SELF && ours.containsKey(id)
 
-    /** Packages the helper installed that the index doesn't list (or there is no index). */
-    fun unlisted(): List<Index.App> {
-        val ours = ours ?: return emptyList()
-        return ours.filter { (id, _) -> has(id) && store.index?.app(id) == null }
-            .map { (id, name) -> unlistedApp(id, name) }
-    }
+    /** Packages the store installed that the index doesn't list (or there is no index). */
+    fun unlisted(): List<Index.App> = ours.filter { (id, _) -> has(id) && store.index?.app(id) == null }
+        .map { (id, name) -> unlistedApp(id, name) }
 
     fun state(a: Index.App): State {
         val have = installed[a.id]
@@ -66,7 +87,7 @@ internal class Shelf(private val store: Store) {
             Versions.compare(v.version, have) > 0 -> State("Update to " + v.version, Tone.ACCENT, "Update")
             else -> State("Installed $have", Tone.GOOD)
         }
-        // an expired list can't be trusted for installs (the helper refuses it too); Remove never needs it
+        // an expired list can't be trusted for installs (the service refuses it too); Remove never needs it
         s.blocked = s.action != null && s.action != "Remove" && store.indexExpired
         return s
     }
