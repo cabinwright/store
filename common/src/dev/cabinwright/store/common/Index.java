@@ -1,10 +1,10 @@
-package dev.kiastore.common;
+package dev.cabinwright.store.common;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** A parsed index.json (format 1, see kia-apps DESIGN.md). Only build it from verified bytes. */
+/** A parsed index.json (format 1, see the index repo's DESIGN.md). Only build it from verified bytes. */
 public final class Index {
     public static final String[] CATEGORIES = { "fixes", "apps", "projection", "system", "tools", "fun" };
 

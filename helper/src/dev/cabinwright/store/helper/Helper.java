@@ -1,11 +1,11 @@
-package dev.kiastore.helper;
+package dev.cabinwright.store.helper;
 
-import dev.kiastore.common.Index;
-import dev.kiastore.common.IndexCheck;
-import dev.kiastore.common.Json;
-import dev.kiastore.common.Keys;
-import dev.kiastore.common.NemesisData;
-import dev.kiastore.common.Versions;
+import dev.cabinwright.store.common.Index;
+import dev.cabinwright.store.common.IndexCheck;
+import dev.cabinwright.store.common.Json;
+import dev.cabinwright.store.common.Keys;
+import dev.cabinwright.store.common.NemesisData;
+import dev.cabinwright.store.common.Versions;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -24,9 +24,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * The kia.store install helper: a root NEMESIS service (svc/helper.sh starts it with
+ * The cabinwright.store install helper: a root NEMESIS service (svc/helper.sh starts it with
  * dalvikvm). It installs or removes NEMESIS packages for requests the driver confirmed in
- * the App Store app, which it reads from the app's provider (content://dev.kiastore.requests,
+ * the App Store app, which it reads from the app's provider (content://dev.cabinwright.store.requests,
  * answered only for root, system and adb), never from the sdcard: any app can write there.
  * The sdcard is trusted for nothing privileged: the index on it is re-verified against
  * this helper's own pinned keys and sequence, and a download is copied into private storage
@@ -35,24 +35,33 @@ import java.util.zip.ZipFile;
  * state.json) that it installed the package.
  */
 public final class Helper {
-    static final String VERSION = "1.1";
-    static final String SD = "/sdcard/kia-store";
+    static final String VERSION = "1.2";
+    static final String SD = "/sdcard/cabinwright/store";
     /** App Store 1.0 left requests here; they are cleared away, never read. */
     static final String OLD_REQUESTS = SD + "/requests";
-    static final String REQUEST_URI = "content://dev.kiastore.requests/pending";
-    static final String APP = "dev.kiastore";
+    static final String REQUEST_URI = "content://dev.cabinwright.store.requests/pending";
+    static final String APP = "dev.cabinwright.store";
     static final String RESULTS = SD + "/results";
     static final String DOWNLOADS = SD + "/downloads";
     static final String STATUS = SD + "/status.json";
-    static final String PRIVATE = "/data/nemesis/kia-store";
+    static final String PRIVATE = "/data/nemesis/cabinwright/store";
     static final File WORK = new File(PRIVATE, "work");
     static final File STATE = new File(PRIVATE, "state.json");
     static final File PENDING = new File(PRIVATE, "pending.json");
     static final File DEBUG_INDEX = new File(PRIVATE, "debug-index");
-    static final String SELF = "kia.store";
-    static final File JAR = new File("/data/nemesis/apps/kia.store/svc/helper.jar");
+    static final String SELF = "cabinwright.store";
+    static final File JAR = new File("/data/nemesis/apps/cabinwright.store/svc/helper.jar");
     /** The copy helper.sh made of JAR and started: exactly the code that is running. */
     static final File RUNNING = new File(PRIVATE, "vm/helper.jar");
+
+    // kia.store, this package's name before 1.2: its helper's main class and its record.
+    // Both are only ever read: the import below never writes to kia.store's files.
+    static final String LEGACY_MAIN = "dev.kiastore.helper.Helper";
+    static final File LEGACY_STATE = new File("/data/nemesis/kia-store/state.json");
+    static final String LEGACY_SELF = "kia.store";
+    /** Packages renamed along with it; any other recorded id (tweaks.*) stays as it is. */
+    static final String[][] RENAMED = { { "kia.menu", "cabinwright.menu" }, { "kia.tweaks", "cabinwright.tweaks" } };
+    static final long LEGACY_POLL_MS = 5000;
 
     static final long POLL_MS = 1000;
     /**
@@ -78,6 +87,8 @@ public final class Helper {
     private boolean providerQuiet = true;
     private String jarStamp = "";
     private String runningHash;
+    /** Set while kia.store's helper runs: why this one waits (status.json "waiting"). */
+    private String waiting = "";
 
     public static void main(String[] args) throws Exception {
         new Helper().run();
@@ -87,8 +98,9 @@ public final class Helper {
         sh("mkdir -p " + PRIVATE + " " + WORK + " && chmod 711 " + PRIVATE + " && chmod 700 " + WORK);
         // NEMESIS can briefly run two copies of a service across an update; one works at a time
         FileLock lock = new RandomAccessFile(new File(PRIVATE, "helper.lock"), "rw").getChannel().lock();
-        log("kia.store helper " + VERSION + " running");
+        log("cabinwright.store helper " + VERSION + " running");
         reloadIfUpdated();
+        importLegacy();
         // early in boot the sdcard may not be mounted yet; NEMESIS gives up on a service
         // that exits five times, so wait here instead of failing
         for (int i = 0; !Sdcard.init(SD, RESULTS, DOWNLOADS); i++) {
@@ -97,6 +109,8 @@ public final class Helper {
             Thread.sleep(5000);
         }
         log("sdcard: " + Sdcard.mode());
+        waitForLegacyHelper();
+        finishImport();
         seedRecord();
         finishPending();
         clearOldRequests();
@@ -150,6 +164,123 @@ public final class Helper {
         return JAR.lastModified() + "/" + JAR.length();
     }
 
+    // ------------------------------------------------------------------ moving from kia.store
+
+    /**
+     * While this helper has no record of its own, imports kia.store's (LEGACY_STATE, read
+     * only): the ids it installed, renamed where the package was (kia.menu, kia.tweaks),
+     * kia.store itself dropped; its index sequence numbers, so an index it had already moved
+     * past isn't accepted here; whether its record was seeded; the request ids it ran.
+     * Until this helper first acts (finishImport) the import is redone whenever that file
+     * changes, so what kia.store's helper still does meanwhile is carried over too. After
+     * that it never runs again, so it is idempotent: a second start finds our own record.
+     */
+    private void importLegacy() {
+        Map<String, Object> own = STATE.isFile() ? state() : null;
+        Map<String, Object> imported = own == null ? null : Json.obj(own, "imported");
+        if (own != null && (imported.isEmpty() || Json.bool(imported, "final"))) return;
+        if (!LEGACY_STATE.isFile()) return;
+        String stamp = LEGACY_STATE.lastModified() + "/" + LEGACY_STATE.length();
+        if (imported != null && Json.str(imported, "stamp").equals(stamp)) return;
+        Map<String, Object> old;
+        try {
+            old = Json.parseObject(new String(readFile(LEGACY_STATE, 64 << 10), "UTF-8"));
+        } catch (Exception e) {
+            log("import: can't read " + LEGACY_STATE + " (" + e.getMessage() + "); starting a record of our own");
+            return;
+        }
+        Map<String, Object> state = importedState(old, stamp, System.currentTimeMillis() / 1000);
+        try {
+            writeFile(STATE, Json.write(state).getBytes("UTF-8"));
+            log("import: kia.store's record " + LEGACY_STATE + ": installed " + Json.strings(state, "installed") + " (from "
+                    + Json.strings(old, "installed") + "), sequence " + Json.num(old, "sequence", -1)
+                    + (imported == null ? "" : " (again: it changed)"));
+        } catch (IOException e) {
+            log("import: " + e.getMessage());
+        }
+    }
+
+    /** Our record made from kia.store's (see importLegacy); "imported" says where from. */
+    public static Map<String, Object> importedState(Map<String, Object> old, String stamp, long now) {
+        List<String> ids = new ArrayList<String>();
+        for (String id : Json.strings(old, "installed")) {
+            String to = renamed(id);
+            if (to != null && ID.matcher(to).matches() && !ids.contains(to)) ids.add(to);
+        }
+        java.util.Collections.sort(ids);
+        Map<String, Object> state = Json.of("installed", new ArrayList<Object>(ids));
+        for (String k : new String[] { "sequence", "debug_sequence" }) {
+            long n = Json.num(old, k, -1);
+            if (n >= 0) state.put(k, n);
+        }
+        if (Json.bool(old, "seeded")) state.put("seeded", true);
+        List<String> done = Json.strings(old, "done");
+        while (done.size() > DONE_KEEP) done.remove(0);
+        state.put("done", new ArrayList<Object>(done));
+        state.put("imported", Json.of("from", LEGACY_STATE.getPath(), "stamp", stamp, "time", now, "final", false));
+        return state;
+    }
+
+    /** kia.store's id for a package -> ours; null for kia.store itself. */
+    public static String renamed(String id) {
+        if (id.equals(LEGACY_SELF)) return null;
+        for (String[] r : RENAMED) if (r[0].equals(id)) return r[1];
+        return id;
+    }
+
+    /** From here on the record is ours: the import is never redone. */
+    private void finishImport() {
+        Map<String, Object> state = state();
+        Map<String, Object> imported = Json.obj(state, "imported");
+        if (imported.isEmpty() || Json.bool(imported, "final")) return;
+        imported.put("final", true);
+        state.put("imported", imported);
+        try {
+            writeFile(STATE, Json.write(state).getBytes("UTF-8"));
+            log("import: done; the record is ours from now on");
+        } catch (IOException e) {
+            log("import: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Two helpers must never act at once. While kia.store's helper runs (both may be
+     * installed during the switch), this one only keeps its import current and reports
+     * that it is waiting; it reads no requests. Each app's requests come from its own
+     * provider (dev.kiastore.requests for the old one, ours for this one), so neither helper
+     * can see the other's.
+     */
+    private void waitForLegacyHelper() throws InterruptedException {
+        if (!legacyHelperRunning()) return;
+        log("kia.store's helper is running; waiting for it to stop (one helper acts at a time)");
+        waiting = "The old App Store (kia.store) is still installed. Remove it to finish moving to Cabinwright.";
+        while (legacyHelperRunning()) {
+            importLegacy();
+            if (System.currentTimeMillis() - lastHeartbeat > HEARTBEAT_MS) heartbeat();
+            reloadIfUpdated();
+            Thread.sleep(LEGACY_POLL_MS);
+        }
+        importLegacy();
+        waiting = "";
+        log("kia.store's helper has stopped; carrying on");
+    }
+
+    /** True while a process runs kia.store's helper class (its dalvikvm command line). */
+    static boolean legacyHelperRunning() {
+        String[] pids = new File("/proc").list();
+        if (pids == null) return false;
+        for (String p : pids) {
+            if (p.isEmpty() || !Character.isDigit(p.charAt(0))) continue;
+            try {
+                String cmd = new String(readFile(new File("/proc/" + p + "/cmdline"), 4096), "UTF-8");
+                for (String arg : cmd.split("\0")) if (arg.equals(LEGACY_MAIN)) return true;
+            } catch (IOException e) {
+                // gone meanwhile
+            }
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------------ requests
 
     private static final class Failure extends Exception {
@@ -197,11 +328,11 @@ public final class Helper {
             out = e.toString();
         }
         if (!out.contains("Row: ") && !out.startsWith("No result found.")) {
-            if (!providerQuiet) log("the App Store app didn't answer: " + firstLine(out));
+            if (!providerQuiet) log("the Cabinwright app didn't answer: " + firstLine(out));
             providerQuiet = true;
             return;
         }
-        if (providerQuiet) log("reading requests from the App Store app");
+        if (providerQuiet) log("reading requests from the Cabinwright app");
         providerQuiet = false;
         List<String> done = Json.strings(state(), "done");
         for (String line : out.split("\n")) {
@@ -273,10 +404,10 @@ public final class Helper {
                 // no index here: removing must work when the entry is gone, the index has
                 // expired or there is none. What bounds it is our own record of what we installed.
                 String name = installedName(id);
-                if (id.equals(SELF)) throw new Failure("The App Store can't remove itself; use NEMESIS Manager.");
+                if (id.equals(SELF)) throw new Failure("Cabinwright can't remove itself; use NEMESIS Manager.");
                 if (installedVersion(id) == null) throw new Failure(name + " isn't installed.");
                 if (!recorded().contains(id)) {
-                    throw new Failure(name + " wasn't installed by the App Store; remove it with NEMESIS Manager.");
+                    throw new Failure(name + " wasn't installed by Cabinwright; remove it with NEMESIS Manager.");
                 }
                 result(uuid, "working", "removing", "Removing " + name, "", req);
                 runNemesis(uuid, req, name, "uninstall " + id, null);
@@ -299,7 +430,7 @@ public final class Helper {
             throws Exception {
         Index.Version v = app.version(version);
         if (v == null) throw new Failure(app.name + " " + version + " isn't in the signed index.");
-        if (v.review.execute) throw new Failure("The App Store never installs autorun (execute) packages.");
+        if (v.review.execute) throw new Failure("Cabinwright never installs autorun (execute) packages.");
         String firmware = firmware();
         if (!v.fits(firmware)) {
             throw new Failure(app.name + " " + version + " isn't made for this firmware ("
@@ -332,7 +463,7 @@ public final class Helper {
 
     /**
      * Runs `nemesis <args>` outside this service: NEMESIS stops a package's services (their
-     * whole process group) while it updates it, which for kia.store is this helper. Started
+     * whole process group) while it updates it, which for cabinwright.store is this helper. Started
      * through `nemesis root`, the command belongs to NEMESIS's own daemon and finishes even
      * if we're killed; pending.json lets the next helper report its result.
      */
@@ -424,7 +555,7 @@ public final class Helper {
             Sdcard.copy(SD + "/index.json", idx, MAX_INDEX);
             Sdcard.copy(SD + "/index.json.sig", sig, 64 << 10);
         } catch (IOException e) {
-            throw new Failure("No index on the sdcard yet: refresh the App Store.");
+            throw new Failure("No index on the sdcard yet: refresh Cabinwright.");
         }
         boolean debug = DEBUG_INDEX.isFile();
         // the test key only ever verifies the debug index, and only in debug builds
@@ -464,7 +595,7 @@ public final class Helper {
 
     /**
      * Once, on the first 1.1 helper: starts the record with every installed package the
-     * verified, unexpired index lists (offered or retired), never kia.store. That's what 1.0
+     * verified, unexpired index lists (offered or retired), never cabinwright.store. That's what 1.0
      * would have removed. Until there is such an index it tries again; after it, removal
      * never reads the index again.
      */
@@ -586,6 +717,7 @@ public final class Helper {
                 "firmware", fw == null ? "" : fw, "sequence", Json.num(st, "sequence", -1),
                 "debug", DEBUG_INDEX.isFile(), "busy", PENDING.isFile(), "packages", packages,
                 "store_installed", ours);
+        if (!waiting.isEmpty()) status.put("waiting", waiting);
         try {
             Sdcard.write(STATUS, Json.write(status).getBytes("UTF-8"));
         } catch (IOException e) {
@@ -697,7 +829,7 @@ public final class Helper {
     private static final java.text.SimpleDateFormat STAMP = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss'Z'");
 
     static {
-        // UTC: Dalvik run by hand doesn't know Kia's zone ("Mobis/UTC-05:00", with DST)
+        // UTC: Dalvik run by hand doesn't know the head unit's zone ("Mobis/UTC-05:00", with DST)
         STAMP.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
     }
 

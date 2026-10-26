@@ -1,4 +1,4 @@
-package dev.kiastore.common;
+package dev.cabinwright.store.common;
 
 import java.security.KeyFactory;
 import java.security.MessageDigest;

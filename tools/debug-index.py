@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Makes a signed debug index for testing kia.store on a car, without GitHub.
+"""Makes a signed debug index for testing cabinwright.store on a car, without GitHub.
 
 usage: debug-index.py <out dir> <apps.json> --sequence N [--key ~/.config/kia-store/kia-store-test.pem]
-                      [--base file:///sdcard/kia-store-debug/] [--expires-days 90]
+                      [--base file:///sdcard/cabinwright/store-debug/] [--expires-days 90]
 
 <apps.json> is a list of apps in the apps/<id>.json format, except that each version names a
 local "zip" instead of "url"/"sha256" (size, hash and review come from the zip), and
@@ -10,12 +10,12 @@ local "zip" instead of "url"/"sha256" (size, hash and review come from the zip),
 copied to <out dir> and their URLs point at --base. Writes index.json, index.json.sig and the
 zips; push the directory to the car and point the store at it (root-only marker file):
 
-  adb push <out dir>/. /sdcard/kia-store-debug/
-  adb shell "nemesis root -c 'echo file:///sdcard/kia-store-debug/ > /data/nemesis/kia-store/debug-index;
-             chmod 644 /data/nemesis/kia-store/debug-index'"
+  adb push <out dir>/. /sdcard/cabinwright/store-debug/
+  adb shell "nemesis root -c 'echo file:///sdcard/cabinwright/store-debug/ > /data/nemesis/cabinwright/store/debug-index;
+             chmod 644 /data/nemesis/cabinwright/store/debug-index'"
 
-Only a DEBUG=1 build of kia.store trusts the test key (keys/test/). The review here is a
-rough stand-in for kia-apps' CI review: types, apps, services and uids from NEMESIS.data.
+Only a DEBUG=1 build of cabinwright.store trusts the test key (keys/test/). The review here is a
+rough stand-in for the index repo's CI review: types, apps, services and uids from NEMESIS.data.
 """
 import argparse
 import base64
@@ -59,7 +59,7 @@ def main():
     ap.add_argument("apps")
     ap.add_argument("--sequence", type=int, required=True)
     ap.add_argument("--key", default=str(Path("~/.config/kia-store/kia-store-test.pem").expanduser()))
-    ap.add_argument("--base", default="file:///sdcard/kia-store-debug/")
+    ap.add_argument("--base", default="file:///sdcard/cabinwright/store-debug/")
     ap.add_argument("--expires-days", type=float, default=90)
     a = ap.parse_args()
 

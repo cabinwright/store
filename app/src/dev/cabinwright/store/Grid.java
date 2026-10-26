@@ -1,4 +1,4 @@
-package dev.kiastore;
+package dev.cabinwright.store;
 
 import android.content.Context;
 import android.view.View;
@@ -6,7 +6,7 @@ import android.view.ViewGroup;
 
 /**
  * Lays its children out in as many equal columns as fit (at least {@code minWidth} each),
- * so the browse grid goes from two columns beside Kia's split-screen panel to three
+ * so the browse grid goes from two columns beside the stock split-screen panel to three
  * across the full screen without being rebuilt. Each row is as tall as its tallest card.
  */
 final class Grid extends ViewGroup {

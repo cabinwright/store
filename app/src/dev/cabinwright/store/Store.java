@@ -1,16 +1,16 @@
-package dev.kiastore;
+package dev.cabinwright.store;
 
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Environment;
 import android.util.Log;
 
-import dev.kiastore.common.Index;
-import dev.kiastore.common.IndexCheck;
-import dev.kiastore.common.Json;
-import dev.kiastore.common.Keys;
-import dev.kiastore.common.NemesisData;
-import dev.kiastore.common.Versions;
+import dev.cabinwright.store.common.Index;
+import dev.cabinwright.store.common.IndexCheck;
+import dev.cabinwright.store.common.Json;
+import dev.cabinwright.store.common.Keys;
+import dev.cabinwright.store.common.NemesisData;
+import dev.cabinwright.store.common.Versions;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -32,17 +32,17 @@ import java.util.UUID;
  * that touch the network or files run on a background thread.
  */
 final class Store {
-    static final String VERSION = "1.1";
-    static final String SELF = "kia.store";
-    static final String INDEX_URL = "https://hazptr.github.io/kia-apps/";
+    static final String VERSION = "1.2";
+    static final String SELF = "cabinwright.store";
+    static final String INDEX_URL = "https://cabinwright.github.io/apps/";
     /** Root-only to create; its first line is the debug index's base URL. */
-    static final File DEBUG_INDEX = new File("/data/nemesis/kia-store/debug-index");
+    static final File DEBUG_INDEX = new File("/data/nemesis/cabinwright/store/debug-index");
     static final File NEMESIS_APPS = new File("/data/nemesis/apps");
     static final long HELPER_STALE_S = 60;
     static final int MAX_INDEX = 4 << 20;
     static final long MAX_ZIP = 64L << 20;
 
-    static final String TAG = "KiaStore";
+    static final String TAG = "CabinwrightStore";
     /** An expired index, in plain words: installs wait for a fresh one, removals don't. */
     static final String OUT_OF_DATE = "The app list is out of date: connect to the internet to refresh it.";
 
@@ -58,7 +58,7 @@ final class Store {
 
     Store(Context context) {
         this.context = context;
-        sd = new File(Environment.getExternalStorageDirectory(), "kia-store");
+        sd = new File(Environment.getExternalStorageDirectory(), "cabinwright/store");
         prefs = context.getSharedPreferences("store", Context.MODE_PRIVATE);
     }
 
@@ -260,12 +260,22 @@ final class Store {
         }
     }
 
-    /** True if the helper wrote its heartbeat recently. */
+    /** True if the helper wrote its heartbeat recently and isn't waiting (see helperWaiting). */
     boolean helperAlive() {
         Map<String, Object> st = helperStatus();
-        if (st == null) return false;
+        if (st == null || !Json.str(st, "waiting").isEmpty()) return false;
         long age = System.currentTimeMillis() / 1000 - Json.num(st, "time", 0);
         return age >= -HELPER_STALE_S && age <= HELPER_STALE_S;
+    }
+
+    /**
+     * Why the helper is idle, or null: while the previous package's (kia.store's) helper
+     * still runs, ours waits for it rather than act alongside it.
+     */
+    String helperWaiting() {
+        Map<String, Object> st = helperStatus();
+        String w = st == null ? "" : Json.str(st, "waiting");
+        return w.isEmpty() ? null : w;
     }
 
     // ------------------------------------------------------------------ plans

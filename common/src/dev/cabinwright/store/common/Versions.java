@@ -1,4 +1,4 @@
-package dev.kiastore.common;
+package dev.cabinwright.store.common;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -29,7 +29,7 @@ public final class Versions {
         return end == 0 ? 0 : Long.parseLong(s.substring(0, end));
     }
 
-    /** A requirement such as "kia.menu>=1.1" or "kia.menu". */
+    /** A requirement such as "cabinwright.menu>=1.1" or "cabinwright.menu". */
     public static final class Requirement {
         public final String id, op, version;
 

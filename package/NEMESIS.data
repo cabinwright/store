@@ -1,14 +1,14 @@
 [nemesis]
-version=1.1
-id=kia.store
-name=App Store
+version=1.2
+id=cabinwright.store
+name=Cabinwright
 types=application,service
 
 [app.0]
 kind=apk
-path=app/kia-store.apk
-package=dev.kiastore
-component=dev.kiastore/.StoreActivity
+path=app/store.apk
+package=dev.cabinwright.store
+component=dev.cabinwright.store/.StoreActivity
 
 [service.0]
 name=helper

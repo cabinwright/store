@@ -1,10 +1,10 @@
 # The App Store as the platform
 
-Status: design, not built yet (target: kia.store 2.0).
+Status: design, not built yet (target: cabinwright.store 2.0).
 
 ## Goal
 
-Installing one NEMESIS package, `kia.store`, sets up the whole system. Everything else
+Installing one NEMESIS package, `cabinwright.store`, sets up the whole system. Everything else
 (Tweaks, Edit Menu, tweak packs, apps) comes from the store, and nothing installed from the
 store talks to NEMESIS directly. When NEMESIS changes, only the store changes.
 
@@ -19,18 +19,18 @@ store talks to NEMESIS directly. When NEMESIS changes, only the store changes.
 The model is LG webOS Homebrew Channel's: apps are ordinary unprivileged apps, and the few
 privileged things live in one small, reviewed component with a narrow, stable API.
 
-## What kia.store ships
+## What cabinwright.store ships
 
 | Part | Runs as | Job |
 |---|---|---|
 | Store app | its own app uid | browse, install, update, remove; the driver's approvals |
 | `helper` (exists) | root, NEMESIS service | verifies and installs packages for the store app |
 | `broker` (new) | root, NEMESIS service (app_process) | the privileged API apps may use |
-| tweak runner (moved from kia-tweaks' `tweaksd`) | root, NEMESIS service | runs every installed package's tweaks unprivileged, performs their declared privileged steps, owns all backups |
+| tweak runner (moved from Tweaks' `tweaksd`) | root, NEMESIS service | runs every installed package's tweaks unprivileged, performs their declared privileged steps, owns all backups |
 | lockdown (new, system tier) | root, at boot | restricts who may run `nemesis` |
 
 The Tweaks app stays a separate store app: the UI and the base tweaks. It requires
-`kia.store>=2.0` and talks to the runner through the broker.
+`cabinwright.store>=2.0` and talks to the runner through the broker.
 
 ## The store writes the manifest
 
@@ -154,22 +154,22 @@ entry claims, and fails if they differ.
 |---|---|---|---|
 | `app` | APKs (the store writes the manifest) | normal, plus any capabilities it declares | its permissions, if any |
 | `tweaks` | `tweaks/<id>/` folders in the tweak format and `lib/` (the store writes the manifest) | scripts read line by line | "Changes system settings" |
-| `system` | anything, including patches to Kia's apps; its own manifest | first-party only (allowlisted in the store); exact firmware match; tested restore and USB rescue | "System change" with the restore notes |
+| `system` | anything, including patches to the head unit's apps; its own manifest | first-party only (allowlisted in the store); exact firmware match; tested restore and USB rescue | "System change" with the restore notes |
 
-Only `kia.store` itself (and the first-party system packages) may declare NEMESIS services.
+Only `cabinwright.store` itself (and the first-party system packages) may declare NEMESIS services.
 
 ## The broker
 
 - A root daemon (Kotlin under app_process, like the helper) on a Unix socket in the abstract
-  namespace (`dev.kiastore.broker`).
+  namespace (`dev.cabinwright.store.broker`).
 - **Who's asking:** the peer's uid comes from the socket (`SO_PEERCRED`), never from the
   request. uid → package comes from `/data/system/packages.list`, and the package's signing
   certificate must match the one recorded at install.
 - **What they may do:** what the driver agreed to (see Permissions), recorded by the helper
   in `state.json`. A request for anything else is refused and logged.
 - **API:** small, versioned requests (`{"v":1,"cap":"tweaks","op":"set","id":...}`), with a
-  client in kia-menu's API (`KiaBroker`). An app checks `KiaBroker.version()` and degrades.
-- KiaAudio needs no capability: app audio works unprivileged.
+  client in Cabinwright's API (`CarBroker`). An app checks `CarBroker.version()` and degrades.
+- CarAudio needs no capability: app audio works unprivileged.
 
 ## Lockdown
 
@@ -188,11 +188,11 @@ store review treats every APK as root-capable, and the store says so.
 
 ## Bootstrapping and migration
 
-1. A user installs `kia.store` with NEMESIS Manager (USB or ADB). Its services start:
+1. A user installs `cabinwright.store` with NEMESIS Manager (USB or ADB). Its services start:
    helper, broker, runner.
 2. The store offers Tweaks, Edit Menu and the rest.
-3. Moving from today: kia.store 2.0 takes over tweak running. Tweaks 2.0 drops `tweaksd`
-   and requires store 2.0. The runner reads the existing `/data/nemesis/kia-tweaks/state.json`,
+3. Moving from today: cabinwright.store 2.0 takes over tweak running. Tweaks 2.0 drops `tweaksd`
+   and requires store 2.0. The runner reads the existing `/data/nemesis/cabinwright/tweaks/state.json`,
    so switches keep their state, and updating the store before Tweaks briefly runs both
    runners. To prevent that, the runner stays idle while an old `tweaksd` is running.
 
@@ -212,7 +212,7 @@ into a gated `su`. Two more ideas from it:
 
 ## Index signing
 
-The index signing key is the root of trust, and today any push to kia-apps `main` is
+The index signing key is the root of trust, and today any push to cabinwright/apps `main` is
 signed by Actions. At minimum: branch protection with required review on `main`. Better:
 sign on the maintainer's machine, or require both keys (2026a and 2026b) so one leaked
 secret isn't enough.

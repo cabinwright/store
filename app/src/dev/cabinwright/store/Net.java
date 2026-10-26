@@ -1,8 +1,8 @@
-package dev.kiastore;
+package dev.cabinwright.store;
 
 import android.content.Context;
 
-import dev.kiastore.common.Base64;
+import dev.cabinwright.store.common.Base64;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -82,7 +82,7 @@ final class Net {
         } finally {
             out.close();
         }
-        return dev.kiastore.common.IndexCheck.hex(md.digest());
+        return dev.cabinwright.store.common.IndexCheck.hex(md.digest());
     }
 
     private void fetch(String url, OutputStream out, long max, Progress p) throws IOException {
@@ -101,7 +101,7 @@ final class Net {
             c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(15000);
             c.setReadTimeout(30000);
-            c.setRequestProperty("User-Agent", "kia-store/" + Store.VERSION);
+            c.setRequestProperty("User-Agent", "Cabinwright/" + Store.VERSION);
             c.setRequestProperty("Accept-Encoding", "identity");
             try {
                 int code;

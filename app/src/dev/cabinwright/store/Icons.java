@@ -1,4 +1,4 @@
-package dev.kiastore;
+package dev.cabinwright.store;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -6,8 +6,8 @@ import android.os.Handler;
 import android.view.View;
 import android.widget.ImageView;
 
-import dev.kiastore.common.IndexCheck;
-import dev.kiastore.common.Index;
+import dev.cabinwright.store.common.IndexCheck;
+import dev.cabinwright.store.common.Index;
 
 import java.io.File;
 import java.util.HashMap;

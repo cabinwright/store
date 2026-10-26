@@ -1,4 +1,4 @@
-package dev.kiastore.helper;
+package dev.cabinwright.store.helper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;

@@ -1,10 +1,11 @@
-package dev.kiastore.test;
+package dev.cabinwright.store.test;
 
-import dev.kiastore.common.Index;
-import dev.kiastore.common.IndexCheck;
-import dev.kiastore.common.Json;
-import dev.kiastore.common.NemesisData;
-import dev.kiastore.common.Versions;
+import dev.cabinwright.store.common.Index;
+import dev.cabinwright.store.common.IndexCheck;
+import dev.cabinwright.store.common.Json;
+import dev.cabinwright.store.common.NemesisData;
+import dev.cabinwright.store.common.Versions;
+import dev.cabinwright.store.helper.Helper;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -22,6 +23,7 @@ public final class CommonTest {
         json();
         nemesisData();
         retirement();
+        legacyImport();
         vectors(new File(args[0]));
         System.out.println("ok: " + passed + " checks");
     }
@@ -34,17 +36,38 @@ public final class CommonTest {
         passed++;
     }
 
+    /** The helper's one-time import of kia.store's record (moving from the kia.* packages). */
+    private static void legacyImport() {
+        check(Helper.renamed("kia.menu").equals("cabinwright.menu"), "kia.menu -> cabinwright.menu");
+        check(Helper.renamed("kia.tweaks").equals("cabinwright.tweaks"), "kia.tweaks -> cabinwright.tweaks");
+        check(Helper.renamed("kia.store") == null, "kia.store dropped");
+        check(Helper.renamed("tweaks.adb").equals("tweaks.adb"), "packs keep their ids");
+        Map<String, Object> old = Json.parseObject("{\"installed\":[\"kia.menu\",\"kia.store\",\"kia.tweaks\","
+                + "\"tweaks.adb\",\"tweaks.projection\",\"bad id!\"],\"sequence\":14,\"debug_sequence\":3,"
+                + "\"seeded\":true,\"done\":[\"u1\",\"u2\"]}");
+        Map<String, Object> st = Helper.importedState(old, "1/2", 99);
+        check(Json.strings(st, "installed").equals(java.util.Arrays.asList("cabinwright.menu", "cabinwright.tweaks",
+                "tweaks.adb", "tweaks.projection")), "installed ids mapped: " + Json.strings(st, "installed"));
+        check(Json.num(st, "sequence", -1) == 14 && Json.num(st, "debug_sequence", -1) == 3, "sequences kept");
+        check(Json.bool(st, "seeded") && Json.strings(st, "done").size() == 2, "seeded and done kept");
+        Map<String, Object> imp = Json.obj(st, "imported");
+        check(!Json.bool(imp, "final") && Json.str(imp, "stamp").equals("1/2"), "import not final yet");
+        Map<String, Object> none = Helper.importedState(Json.parseObject("{}"), "", 0);
+        check(Json.strings(none, "installed").isEmpty() && !none.containsKey("sequence") && !Json.bool(none, "seeded"),
+                "empty record");
+    }
+
     private static void versions() {
         check(Versions.compare("1.10", "1.9") > 0, "1.10 > 1.9");
         check(Versions.compare("1.0", "1") == 0, "1.0 == 1");
         check(Versions.compare("1.4", "1.4.1") < 0, "1.4 < 1.4.1");
         check(Versions.compare("2", "10") < 0, "2 < 10");
-        Versions.Requirement r = Versions.requirement("kia.menu>=1.1");
-        check(r != null && r.id.equals("kia.menu") && r.op.equals(">=") && r.version.equals("1.1"), "parse >=");
+        Versions.Requirement r = Versions.requirement("cabinwright.menu>=1.1");
+        check(r != null && r.id.equals("cabinwright.menu") && r.op.equals(">=") && r.version.equals("1.1"), "parse >=");
         check(r.satisfiedBy("1.1") && r.satisfiedBy("1.10") && !r.satisfiedBy("1.0") && !r.satisfiedBy(null), ">= semantics");
-        Versions.Requirement any = Versions.requirement("kia.menu");
+        Versions.Requirement any = Versions.requirement("cabinwright.menu");
         check(any != null && any.satisfiedBy("0.1") && !any.satisfiedBy(null), "bare requirement");
-        check(Versions.requirement("kia.menu>=") == null, "op without version");
+        check(Versions.requirement("cabinwright.menu>=") == null, "op without version");
         Versions.Requirement eq = Versions.requirement("a.b = 2.0");
         check(eq != null && eq.satisfiedBy("2") && !eq.satisfiedBy("2.1"), "= with spaces");
     }

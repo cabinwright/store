@@ -1,4 +1,4 @@
-package dev.kiastore.common;
+package dev.cabinwright.store.common;
 
 /** Standard base64 decoding (Android 4.4 has no java.util.Base64; the helper avoids android.*). */
 public final class Base64 {

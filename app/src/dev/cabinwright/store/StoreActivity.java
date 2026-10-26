@@ -1,4 +1,4 @@
-package dev.kiastore;
+package dev.cabinwright.store;
 
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -16,10 +16,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import dev.kiamenu.api.ui.KiaPage;
-import dev.kiastore.common.Index;
-import dev.kiastore.common.Json;
-import dev.kiastore.common.Versions;
+import dev.cabinwright.api.ui.CarPage;
+import dev.cabinwright.store.common.Index;
+import dev.cabinwright.store.common.Json;
+import dev.cabinwright.store.common.Versions;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,7 +32,7 @@ import java.util.concurrent.Executors;
  * remove. Installing goes through the root helper (svc/helper.sh): this app downloads
  * and checks the zip, leaves a request on the sdcard, and shows the helper's progress.
  */
-public class StoreActivity extends KiaPage {
+public class StoreActivity extends CarPage {
     private static final long TICK_MS = 3000;
     private static final long AUTO_REFRESH_MS = 6 * 3600 * 1000L;
     /** The Updates tab, kept in {@code category} beside the real categories. */
@@ -124,7 +124,7 @@ public class StoreActivity extends KiaPage {
         }
         firmware = Store.firmware();
 
-        LinearLayout bar = headerBar("App Store");
+        LinearLayout bar = headerBar("Cabinwright");
         title = (TextView) bar.getChildAt(0);
         info = text("", 15, MUTED, false);
         bar.addView(info);
@@ -333,8 +333,9 @@ public class StoreActivity extends KiaPage {
     private void start(Index.App app, List<Store.Step> steps, boolean remove, boolean all) {
         if (job != null && !job.done) return;
         if (!helperAlive) {
-            showBanner(BAD, "The installer service isn't running, so nothing can be installed. "
-                    + "Reinstall the App Store with NEMESIS Manager.");
+            String waiting = store.helperWaiting();
+            showBanner(BAD, waiting != null ? waiting : "The installer service isn't running, so nothing can be installed. "
+                    + "Reinstall Cabinwright with NEMESIS Manager.");
             return;
         }
         final Job j = new Job();
@@ -544,7 +545,7 @@ public class StoreActivity extends KiaPage {
     }
 
     private void renderBrowse() {
-        title.setText("App Store");
+        title.setText("Cabinwright");
         Index index = store.index;
         List<String> i = new ArrayList<String>();
         if (store.debug()) i.add("Debug index");
@@ -568,8 +569,9 @@ public class StoreActivity extends KiaPage {
         col.setOrientation(LinearLayout.VERTICAL);
         content.addView(col);
         if (!helperAlive && loaded) {
-            col.addView(note(WARN, "The installer service isn't answering. Installing needs it; "
-                    + "reinstall the App Store with NEMESIS if this stays."));
+            String waiting = store.helperWaiting();
+            col.addView(note(WARN, waiting != null ? waiting : "The installer service isn't answering. Installing needs it; "
+                    + "reinstall Cabinwright with NEMESIS if this stays."));
         }
         List<Index.App> unlisted = unlisted();
         if (index == null) {
@@ -804,7 +806,7 @@ public class StoreActivity extends KiaPage {
         TextView h = section("INSTALLED");
         if (!gap) h.setPadding(0, 0, 0, dp(2));
         s.addView(h);
-        TextView why = text("Installed by the App Store, but not in its app list. You can still remove them.",
+        TextView why = text("Installed by Cabinwright, but not in its app list. You can still remove them.",
                 15, MUTED, false);
         why.setPadding(0, 0, 0, dp(10));
         s.addView(why);
@@ -1061,9 +1063,9 @@ public class StoreActivity extends KiaPage {
         LinearLayout review = panel();
         if (!isListed) {
             review.addView(text("NOT IN THE STORE", 15, MUTED, false));
-            TextView t = text((store.index == null ? "The App Store has no app list right now. "
-                    : "The App Store's list doesn't have this package any more. ")
-                    + "The App Store installed it, so it can still remove it.", 16, TEXT, false);
+            TextView t = text((store.index == null ? "Cabinwright has no app list right now. "
+                    : "Cabinwright's list doesn't have this package any more. ")
+                    + "Cabinwright installed it, so it can still remove it.", 16, TEXT, false);
             t.setPadding(0, dp(6), 0, 0);
             t.setLineSpacing(0, 1.1f);
             review.addView(t);
@@ -1275,7 +1277,7 @@ public class StoreActivity extends KiaPage {
         return (s / 86400) + " d ago";
     }
 
-    /** A slim progress bar in Kia's teal; -1 shows a full, dimmed bar (working, no percentage). */
+    /** A slim progress bar in the head unit's teal; -1 shows a full, dimmed bar (working, no percentage). */
     private final class Bar extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF r = new RectF();

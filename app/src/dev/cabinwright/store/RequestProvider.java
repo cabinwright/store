@@ -1,4 +1,4 @@
-package dev.kiastore;
+package dev.cabinwright.store;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -9,13 +9,13 @@ import android.os.Binder;
 import android.os.Process;
 import android.util.Log;
 
-import dev.kiastore.common.Json;
+import dev.cabinwright.store.common.Json;
 
 import java.io.File;
 import java.util.Map;
 
 /**
- * content://dev.kiastore.requests/pending: the requests the driver confirmed in this app,
+ * content://dev.cabinwright.store.requests/pending: the requests the driver confirmed in this app,
  * as rows (uuid, op, id, version), read by the root helper with the stock `content query`
  * command. This is the helper's only source of requests: it never takes them from the
  * sdcard, which any app can write. Read-only, and only for root (the helper), system,

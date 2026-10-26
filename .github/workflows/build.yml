@@ -16,18 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # the kia-menu API the store app is built on, pinned to a release
+      # the Cabinwright API the store app is built on, pinned to a release
       - uses: actions/checkout@v4
         with:
-          repository: hazptr/kia-menu
-          ref: v1.1
-          path: kia-menu
+          repository: cabinwright/menu
+          ref: v1.3
+          path: menu
 
-      # kia-apps' signing test vectors, so the store's verifier is tested on the same bytes
+      # the index repo's signing test vectors, so the store's verifier is tested on the same bytes
       - uses: actions/checkout@v4
         with:
-          repository: hazptr/kia-apps
-          path: kia-apps
+          repository: cabinwright/apps
+          path: apps
 
       # before setup-java: the runner's sdkmanager needs its default (newer) Java
       - name: Android SDK parts
@@ -40,11 +40,11 @@ jobs:
 
       - name: Signing key
         env:
-          KEYSTORE_B64: ${{ secrets.KIAMENU_KEYSTORE_B64 }}
+          KEYSTORE_B64: ${{ secrets.CABINWRIGHT_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "KIAMENU_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "CABINWRIGHT_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           else
             # forks and PRs from them: a throwaway debug key
             mkdir -p ~/.android
@@ -63,15 +63,15 @@ jobs:
 
       - name: Build
         env:
-          KIAMENU_KEYSTORE_PASS: ${{ secrets.KIAMENU_KEYSTORE_PASS }}
+          CABINWRIGHT_KEYSTORE_PASS: ${{ secrets.CABINWRIGHT_KEYSTORE_PASS }}
         run: |
-          KIA_MENU=$PWD/kia-menu sh build.sh
-          KIA_APPS=$PWD/kia-apps sh test/test.sh
-          mv dist/kia.store.zip "dist/kia.store-v$VERSION.zip"
+          CABINWRIGHT_MENU=$PWD/menu sh build.sh
+          CABINWRIGHT_APPS=$PWD/apps sh test/test.sh
+          mv dist/cabinwright.store.zip "dist/cabinwright.store-v$VERSION.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kia.store-v${{ env.VERSION }}
+          name: cabinwright.store-v${{ env.VERSION }}
           path: dist/*.zip
 
       - name: Release
@@ -80,11 +80,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > "$RUNNER_TEMP/notes.md" <<NOTES
-          NEMESIS package \`kia.store\` $VERSION: install \`kia.store-v$VERSION.zip\` with NEMESIS
+          NEMESIS package \`cabinwright.store\` $VERSION: install \`cabinwright.store-v$VERSION.zip\` with NEMESIS
           (USB stick, or \`nemesis install --update <zip>\` over ADB).
 
-          The App Store shows up in All Menus with the kia-menu launcher hook installed. It installs
-          packages from the signed [kia-apps](https://github.com/hazptr/kia-apps) index.
+          The App Store shows up in All Menus with the Cabinwright launcher hook installed. It installs
+          packages from the signed [cabinwright/apps](https://github.com/cabinwright/apps) index.
           NOTES
-          gh release create "$GITHUB_REF_NAME" dist/*.zip --title "kia-store $GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Cabinwright store $GITHUB_REF_NAME" \
             --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
