@@ -394,7 +394,7 @@ internal class Store(val context: Context) {
     }
 
     companion object {
-        const val VERSION = "1.2"
+        const val VERSION = "1.2.1"
         const val SELF = "cabinwright.store"
         const val INDEX_URL = "https://cabinwright.github.io/apps/"
 

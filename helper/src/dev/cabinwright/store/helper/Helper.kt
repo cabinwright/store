@@ -513,7 +513,7 @@ class Helper private constructor() {
     }
 
     companion object {
-        const val VERSION = "1.2"
+        const val VERSION = "1.2.1"
         const val SD = "/sdcard/cabinwright/store"
 
         /** App Store 1.0 left requests here; they are cleared away, never read. */
