@@ -15,6 +15,14 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
 
 ## How it stays safe
 
+- Nothing privileged happens without the driver's knowledge. The helper takes requests only
+  from the store app's read-only provider (`content://dev.kiastore.requests/pending`), which
+  answers only root, system and adb, and the app lists only what the driver just confirmed.
+  Other apps can't see or add requests; request files on the sdcard (App Store 1.0's way) are
+  ignored and deleted. Each request runs once (by its uuid), and the app drops it once it sees
+  the result, gives up, or restarts.
+- Nothing else on the sdcard is trusted for anything privileged: downloads and the index copy
+  are checked again by the helper, and results and status only go to the screen.
 - The index is only trusted if it is signed by a pinned key, newer than the last one seen, and
   not expired. The helper keeps its own record, so a rolled-back or replayed index is refused
   even after the app's data is wiped.
@@ -22,6 +30,12 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
   entry, and `execute` packages (which run at install) are never installed.
 - Before installing, the app shows in plain words what a package does (apps, root services,
   `/system` changes), taken from the review in the index.
+- Retired apps (`deprecated` or `withdrawn` in the index) are never installed or updated, only
+  removed. Removal doesn't need the index at all: the helper removes what its own record
+  (`/data/nemesis/kia-store/state.json`) says it installed, and nothing else, never itself.
+  Helpers before 1.1 kept no record; the first 1.1 helper seeds it once from the verified,
+  unexpired index (installed packages it lists) and logs what it added.
+- With an expired index, nothing is installed or updated; removing still works.
 
 ## Build
 

@@ -14,10 +14,13 @@ export ANDROID_ROOT=${ANDROID_ROOT:-/system}
 mkdir -p "$PRIVATE" "$ANDROID_DATA/dalvik-cache"
 chmod 711 "$PRIVATE"
 chmod 700 "$ANDROID_DATA"
-# a new helper.jar (package update) needs a fresh optimized copy
-rm -f "$ANDROID_DATA"/dalvik-cache/*kia.store*
+# Run a private copy of helper.jar: an update can replace the package's copy while this
+# starts, and the helper compares the two to know that the code running is the current one
+# (Helper.reloadIfUpdated). A new copy needs a fresh optimized dex.
+rm -f "$ANDROID_DATA"/dalvik-cache/*
+cp "$HERE/helper.jar" "$ANDROID_DATA/helper.jar" || exit 1
 echo "$(date) starting helper ($(grep CapEff /proc/self/status))"
 # exec, so NEMESIS stops the Java process itself: it kills a service's pid, and a child
 # of this shell would outlive it. To pick up an update the helper exits and svcmgr
 # restarts it (see Helper.reloadIfUpdated).
-exec dalvikvm -Xmx32m -cp "$HERE/helper.jar" dev.kiastore.helper.Helper
+exec dalvikvm -Xmx32m -cp "$ANDROID_DATA/helper.jar" dev.kiastore.helper.Helper

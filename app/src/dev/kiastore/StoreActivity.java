@@ -35,6 +35,8 @@ import java.util.concurrent.Executors;
 public class StoreActivity extends KiaPage {
     private static final long TICK_MS = 3000;
     private static final long AUTO_REFRESH_MS = 6 * 3600 * 1000L;
+    /** The Updates tab, kept in {@code category} beside the real categories. */
+    private static final String UPDATES = "*updates";
     private static final String[][] CATEGORY_NAMES = {
         { "fixes", "Fixes" }, { "apps", "Apps" }, { "projection", "Projection" },
         { "system", "System" }, { "tools", "Tools" }, { "fun", "Fun" },
@@ -51,18 +53,27 @@ public class StoreActivity extends KiaPage {
 
     // what the screen shows, updated from the worker thread through ui.post
     private Map<String, String> installed = new java.util.HashMap<String, String>();
+    /** What the helper installed (id -> name), so it can always be removed; null if unknown. */
+    private Map<String, String> ours;
     private boolean helperAlive = true, loaded, refreshing;
     private String firmware;
     private String category;
     private Index.App shown;
     private Job job;
     private String confirmFor;
+    /** The page to go back to after a recreate (a day/night switch recreates the activity). */
+    private String restoreId, restoreName, restoreConfirm;
 
     /** An install (with its requirements) or a removal, run on the worker thread. */
     private static final class Job {
         Index.App app;
         List<Store.Step> steps;
         boolean remove, update;
+        /** Update all: several apps, with a status line per app (id -> status). */
+        boolean all;
+        final Map<String, String> rows = new java.util.HashMap<String, String>();
+        /** The step running now (set on the worker thread). */
+        volatile String currentId;
         String status = "";
         int percent = -1;
         String error;
@@ -71,6 +82,8 @@ public class StoreActivity extends KiaPage {
 
     private TextView jobText;
     private Bar jobBar;
+    /** Update all's status lines on screen: id -> view. */
+    private final Map<String, TextView> rowViews = new java.util.HashMap<String, TextView>();
 
     private final Runnable tick = new Runnable() {
         @Override
@@ -79,12 +92,15 @@ public class StoreActivity extends KiaPage {
                 @Override
                 public void run() {
                     final Map<String, String> inst = store.installed();
+                    final Map<String, String> mine = store.storeInstalled();
                     final boolean alive = store.helperAlive();
                     ui.post(new Runnable() {
                         @Override
                         public void run() {
-                            boolean changed = !inst.equals(installed) || alive != helperAlive;
+                            boolean changed = !inst.equals(installed) || alive != helperAlive
+                                    || (mine == null ? ours != null : !mine.equals(ours));
                             installed = inst;
+                            ours = mine;
                             helperAlive = alive;
                             if (changed && job == null) render();
                         }
@@ -100,6 +116,12 @@ public class StoreActivity extends KiaPage {
         super.onCreate(savedInstanceState);
         store = new Store(this);
         icons = new Icons(store);
+        if (savedInstanceState != null) {
+            restoreId = savedInstanceState.getString("shown");
+            restoreName = savedInstanceState.getString("shown_name");
+            restoreConfirm = savedInstanceState.getString("confirm");
+            category = savedInstanceState.getString("category");
+        }
         firmware = Store.firmware();
 
         LinearLayout bar = headerBar("App Store");
@@ -127,17 +149,21 @@ public class StoreActivity extends KiaPage {
         work.execute(new Runnable() {
             @Override
             public void run() {
+                store.clearOldRequests();
                 store.loadSaved();
                 final Map<String, String> inst = store.installed();
+                final Map<String, String> mine = store.storeInstalled();
                 final boolean alive = store.helperAlive();
                 final Map<String, Map<String, Object>> left = store.leftoverResults();
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
                         installed = inst;
+                        ours = mine;
                         helperAlive = alive;
                         loaded = true;
                         showLeftovers(left);
+                        restorePage();
                         render();
                         if (store.index == null || store.indexExpired
                                 || System.currentTimeMillis() - store.lastChecked() > AUTO_REFRESH_MS) {
@@ -147,6 +173,32 @@ public class StoreActivity extends KiaPage {
                 });
             }
         });
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        Index.App a = shown;
+        // before the index has loaded, keep what we were asked to restore
+        out.putString("shown", a != null ? a.id : restoreId);
+        out.putString("shown_name", a != null ? a.name : restoreName);
+        out.putString("confirm", a != null ? confirmFor : restoreConfirm);
+        out.putString("category", category);
+    }
+
+    /** Back to the page that was open before a recreate, once the index and installed list are in. */
+    private void restorePage() {
+        if (restoreId == null) return;
+        Index.App a = store.index == null ? null : store.index.app(restoreId);
+        if (a == null && installed.containsKey(restoreId)) {
+            String name = ours != null && ours.containsKey(restoreId) ? ours.get(restoreId) : restoreName;
+            a = unlistedApp(restoreId, name);
+        }
+        if (a != null) {
+            shown = a;
+            confirmFor = restoreConfirm;
+        }
+        restoreId = restoreName = restoreConfirm = null;
     }
 
     @Override
@@ -183,11 +235,13 @@ public class StoreActivity extends KiaPage {
             public void run() {
                 final String problem = store.refresh();
                 final Map<String, String> inst = store.installed();
+                final Map<String, String> mine = store.storeInstalled();
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
                         refreshing = false;
                         installed = inst;
+                        ours = mine;
                         if (problem != null) showBanner(BAD, problem);
                         render();
                     }
@@ -201,7 +255,7 @@ public class StoreActivity extends KiaPage {
         shown = app;
         confirmFor = null;
         Index.Version v = app.newestFor(firmware);
-        if (v == null || job != null) {
+        if (v == null || job != null || app.retired() || !listed(app) || store.indexExpired) {
             render();
             return;
         }
@@ -221,6 +275,50 @@ public class StoreActivity extends KiaPage {
         }
     }
 
+    /** Opens the removal confirmation on the app's page. */
+    private void askRemove(Index.App app) {
+        shown = app;
+        confirmFor = "remove";
+        render();
+    }
+
+    /**
+     * Removal never depends on the index: what the helper says it installed can always be
+     * removed (it checks its own record again), the App Store itself never.
+     */
+    private boolean removable(String id) {
+        if (!installed.containsKey(id) || id.equals(Store.SELF)) return false;
+        if (ours != null) return ours.containsKey(id);
+        // a helper that doesn't report what it installed: the 1.0 rule, listed apps only
+        return store.index != null && store.index.app(id) != null;
+    }
+
+    private boolean listed(Index.App a) {
+        return store.index != null && store.index.app(a.id) == a;
+    }
+
+    /** Packages the helper installed that the index doesn't list (or there is no index). */
+    private List<Index.App> unlisted() {
+        List<Index.App> out = new ArrayList<Index.App>();
+        if (ours == null) return out;
+        for (Map.Entry<String, String> e : ours.entrySet()) {
+            if (!installed.containsKey(e.getKey())) continue;
+            if (store.index != null && store.index.app(e.getKey()) != null) continue;
+            out.add(unlistedApp(e.getKey(), e.getValue()));
+        }
+        return out;
+    }
+
+    /** A stand-in for an installed package the index doesn't list: enough to show and remove it. */
+    private static Index.App unlistedApp(String id, String name) {
+        Index.App a = new Index.App();
+        a.id = id;
+        a.name = name == null || name.isEmpty() ? id : name;
+        a.summary = id;
+        a.description = a.author = a.homepage = a.category = a.iconUrl = a.iconSha256 = "";
+        return a;
+    }
+
     private static boolean risky(List<Store.Step> steps) {
         for (Store.Step s : steps) {
             if (!s.version.review.rootServices.isEmpty() || s.version.review.systemWrites) return true;
@@ -229,6 +327,10 @@ public class StoreActivity extends KiaPage {
     }
 
     private void start(Index.App app, List<Store.Step> steps, boolean remove) {
+        start(app, steps, remove, false);
+    }
+
+    private void start(Index.App app, List<Store.Step> steps, boolean remove, boolean all) {
         if (job != null && !job.done) return;
         if (!helperAlive) {
             showBanner(BAD, "The installer service isn't running, so nothing can be installed. "
@@ -240,6 +342,10 @@ public class StoreActivity extends KiaPage {
         j.steps = steps;
         j.remove = remove;
         j.update = installed.containsKey(app.id);
+        j.all = all;
+        if (all) {
+            for (Store.Step s : steps) j.rows.put(s.app.id, "Waiting");
+        }
         j.status = "Starting";
         job = j;
         confirmFor = null;
@@ -251,10 +357,12 @@ public class StoreActivity extends KiaPage {
                 if (j.remove) runRemove(j);
                 else runInstall(j);
                 final Map<String, String> inst = store.installed();
+                final Map<String, String> mine = store.storeInstalled();
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
                         installed = inst;
+                        ours = mine;
                         j.done = true;
                         if (j.error != null) showBanner(BAD, j.error);
                         else showBanner(GOOD, j.status);
@@ -271,6 +379,8 @@ public class StoreActivity extends KiaPage {
         for (int i = 0; i < j.steps.size(); i++) {
             final Store.Step s = j.steps.get(i);
             final String label = s.app.name + " " + s.version.version;
+            final boolean was = installed.containsKey(s.app.id);
+            j.currentId = s.app.id;
             update(j, "Downloading " + label, 0);
             try {
                 store.download(s, new Net.Progress() {
@@ -288,16 +398,32 @@ public class StoreActivity extends KiaPage {
                 });
             } catch (Exception e) {
                 j.error = "Downloading " + label + " failed: " + e.getMessage();
+                stopped(j, i);
                 return;
             }
             update(j, "Verifying " + label, -1);
             Map<String, Object> r = ask(j, store.installRequest(s), label);
             store.deleteDownload(s.app.id, s.version.version);
-            if (r == null) return;
+            if (r == null) {
+                stopped(j, i);
+                return;
+            }
+            if (j.all) update(j, (was ? "Updated to " : "Installed ") + s.version.version, 100);
         }
         Store.Step last = j.steps.get(j.steps.size() - 1);
-        update(j, (j.update ? "Updated " : "Installed ") + last.app.name + " "
-                + last.version.version + ".", 100);
+        j.currentId = null;
+        if (j.all) update(j, "Updated " + count(j.steps.size(), "app") + ".", 100);
+        else update(j, (j.update ? "Updated " : "Installed ") + last.app.name + " " + last.version.version + ".", 100);
+    }
+
+    /** Update all stops at the first failure: says which, and that the rest weren't touched. */
+    private void stopped(Job j, int failed) {
+        if (!j.all) return;
+        update(j, "Failed", -1);
+        int left = j.steps.size() - failed - 1;
+        j.error = "Update all stopped at " + j.steps.get(failed).app.name + ". " + j.error
+                + (left > 0 ? "\nThe " + (left == 1 ? "other update was" : left + " other updates were")
+                        + " not started." : "");
     }
 
     private void runRemove(Job j) {
@@ -314,6 +440,15 @@ public class StoreActivity extends KiaPage {
             j.error = "Can't hand the request to the installer: " + e.getMessage();
             return null;
         }
+        try {
+            return follow(j, uuid, label);
+        } finally {
+            // seen, failed or given up on: either way it must never run later
+            store.drop(uuid);
+        }
+    }
+
+    private Map<String, Object> follow(Job j, String uuid, String label) {
         long start = System.currentTimeMillis();
         while (true) {
             try {
@@ -322,6 +457,8 @@ public class StoreActivity extends KiaPage {
                 return null;
             }
             Map<String, Object> r = store.result(uuid);
+            // the helper has it (and runs a uuid only once): no need to offer it again
+            if (r != null) store.drop(uuid);
             String state = r == null ? "" : Json.str(r, "state");
             if (state.equals("ok")) {
                 store.forget(uuid);
@@ -358,11 +495,18 @@ public class StoreActivity extends KiaPage {
     }
 
     private void update(final Job j, final String status, final int percent) {
+        final String id = j.currentId;
         ui.post(new Runnable() {
             @Override
             public void run() {
                 j.status = status;
                 j.percent = percent;
+                if (j.all && id != null) {
+                    String row = percent >= 0 && percent < 100 ? status + " · " + percent + "%" : status;
+                    j.rows.put(id, row);
+                    TextView t = rowViews.get(id);
+                    if (t != null) t.setText(row);
+                }
                 if (jobText != null) jobText.setText(status);
                 if (jobBar != null) jobBar.set(percent);
             }
@@ -385,26 +529,33 @@ public class StoreActivity extends KiaPage {
     private void render() {
         jobText = null;
         jobBar = null;
+        rowViews.clear();
         content.removeAllViews();
         headerRight.removeAllViews();
-        if (shown != null && store.index != null) {
-            Index.App fresh = store.index.app(shown.id);
+        if (shown != null) {
+            // follow the index: an app it dropped is shown as unlisted while it's installed
+            Index.App fresh = store.index == null ? null : store.index.app(shown.id);
             if (fresh != null) shown = fresh;
-            renderDetail(shown);
-        } else {
-            shown = null;
-            renderBrowse();
+            else if (installed.containsKey(shown.id)) shown = unlistedApp(shown.id, shown.name);
+            else if (job == null || !job.app.id.equals(shown.id)) shown = null;
         }
+        if (shown != null) renderDetail(shown);
+        else renderBrowse();
     }
 
     private void renderBrowse() {
         title.setText("App Store");
         Index index = store.index;
-        StringBuilder i = new StringBuilder();
-        if (store.debug()) i.append("Debug index · ");
-        if (index != null) i.append("Index #").append(index.sequence);
-        if (store.lastChecked() > 0) i.append(" · checked ").append(ago(store.lastChecked()));
-        info.setText(i.toString());
+        List<String> i = new ArrayList<String>();
+        if (store.debug()) i.add("Debug index");
+        if (index != null) i.add("Index #" + index.sequence);
+        if (store.lastChecked() > 0) i.add("checked " + ago(store.lastChecked()));
+        List<Index.App> ups = store.updates(installed);
+        info.setText(TextUtils.join(" · ", i));
+        if (!ups.isEmpty()) {
+            TextView badge = text(" · " + count(ups.size(), "update"), 15, ACCENT, false);
+            headerRight.addView(badge);
+        }
         info.setTextColor(MUTED);
         headerRight.addView(button(refreshing ? "Refreshing…" : "Refresh", new View.OnClickListener() {
             @Override
@@ -420,22 +571,49 @@ public class StoreActivity extends KiaPage {
             col.addView(note(WARN, "The installer service isn't answering. Installing needs it; "
                     + "reinstall the App Store with NEMESIS if this stays."));
         }
+        List<Index.App> unlisted = unlisted();
         if (index == null) {
             String msg = !loaded ? "Loading…" : refreshing ? "Fetching the app list…"
                     : store.indexProblem == null ? "No app list yet." : store.indexProblem;
             TextView t = text(msg, 18, MUTED, false);
-            t.setPadding(dp(4), dp(24), 0, 0);
+            t.setPadding(dp(4), dp(24), 0, unlisted.isEmpty() ? 0 : dp(8));
             col.addView(t);
+            // what the store installed can still be removed without any app list
+            if (!unlisted.isEmpty()) col.addView(scroller(installedSection(unlisted, false)),
+                    new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
             return;
         }
         if (store.indexExpired) col.addView(note(WARN, store.indexProblem));
+        for (final Index.App a : index.apps) {
+            if (a.withdrawn.isEmpty() || !installed.containsKey(a.id)) continue;
+            TextView w = note(BAD, a.name + " was withdrawn from the store: " + sentence(a.withdrawn)
+                    + " Remove it from the car.");
+            w.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    shown = a;
+                    confirmFor = null;
+                    render();
+                }
+            });
+            col.addView(w);
+        }
+
+        // retired apps only show to cars that have them, so they can be removed
+        List<Index.App> visible = new ArrayList<Index.App>();
+        for (Index.App a : index.apps) {
+            if (!a.retired() || installed.containsKey(a.id)) visible.add(a);
+        }
 
         // category chips: All, then the categories that have apps
         LinearLayout chips = new LinearLayout(this);
         chips.setOrientation(LinearLayout.HORIZONTAL);
         chips.addView(chip("All", null));
+        boolean updating = job != null && job.all;
+        if (UPDATES.equals(category) && ups.isEmpty() && !updating) category = null;
+        if (!ups.isEmpty() || updating) chips.addView(chip("Updates (" + ups.size() + ")", UPDATES));
         for (String[] c : CATEGORY_NAMES) {
-            for (Index.App a : index.apps) {
+            for (Index.App a : visible) {
                 if (a.category.equals(c[0])) {
                     chips.addView(chip(c[1], c[0]));
                     break;
@@ -451,14 +629,196 @@ public class StoreActivity extends KiaPage {
         hlp.bottomMargin = dp(10);
         col.addView(hs, hlp);
 
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        if (UPDATES.equals(category)) {
+            renderUpdates(list, ups);
+            col.addView(scroller(list), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+            return;
+        }
         Grid grid = new Grid(this, dp(380), dp(10));
-        for (Index.App a : index.apps) {
+        for (Index.App a : visible) {
             if (category == null || category.equals(a.category)) grid.addView(card(a));
         }
+        list.addView(grid);
+        if (!unlisted.isEmpty() && category == null) list.addView(installedSection(unlisted, true));
+        col.addView(scroller(list), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+    }
+
+    /** Updates: one row per app with a newer version, and Update all. */
+    private void renderUpdates(LinearLayout list, List<Index.App> ups) {
+        boolean updating = job != null && job.all;
+        boolean off = job != null || store.indexExpired;
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(text(updating ? "Updating " + count(job.steps.size(), "app") + ", one at a time"
+                : count(ups.size(), "update") + " available", 17, TEXT, false),
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        TextView all = button("Update all", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                askUpdateAll();
+            }
+        });
+        enable(all, !off && !ups.isEmpty());
+        head.addView(all);
+        head.setPadding(0, 0, 0, dp(10));
+        list.addView(head);
+        if (store.indexExpired) list.addView(note(WARN, Store.OUT_OF_DATE));
+        if ("updates".equals(confirmFor) && !updating) list.addView(updatesConfirm(ups));
+
+        // while Update all runs, its own list: the index's list shrinks as updates land
+        List<Index.App> rows = new ArrayList<Index.App>();
+        if (updating) {
+            for (Store.Step s : job.steps) rows.add(s.app);
+        } else {
+            rows.addAll(ups);
+        }
+        Grid grid = new Grid(this, dp(560), dp(10));
+        for (Index.App a : rows) grid.addView(updateRow(a, off));
+        list.addView(grid);
+    }
+
+    private View updateRow(final Index.App a, boolean off) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.HORIZONTAL);
+        c.setGravity(Gravity.CENTER_VERTICAL);
+        c.setPadding(dp(14), dp(12), dp(14), dp(12));
+        c.setBackground(surface(dp(8)));
+        c.addView(icon(a, 56));
+        LinearLayout mid = new LinearLayout(this);
+        mid.setOrientation(LinearLayout.VERTICAL);
+        mid.setPadding(dp(14), 0, dp(8), 0);
+        TextView name = text(a.name, 19, TEXT, false);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        mid.addView(name);
+        Index.Version v = a.newestFor(firmware);
+        String have = installed.get(a.id);
+        String to = v == null ? "?" : v.version;
+        mid.addView(text(have == null ? "New: " + to : have + " → " + to, 15, ACCENT, false));
+        if (v != null && !v.notes.isEmpty()) {
+            TextView n = text(v.notes.replace('\n', ' '), 15, MUTED, false);
+            n.setSingleLine(true);
+            n.setEllipsize(TextUtils.TruncateAt.END);
+            mid.addView(n);
+        }
+        if (job != null && job.all && job.rows.containsKey(a.id)) {
+            TextView st = text(job.rows.get(a.id), 15, TEXT, false);
+            st.setSingleLine(true);
+            st.setEllipsize(TextUtils.TruncateAt.END);
+            rowViews.put(a.id, st);
+            mid.addView(st);
+        }
+        c.addView(mid, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        if (job == null || !job.all) {
+            TextView b = button("Update", new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    askInstall(a);
+                }
+            });
+            enable(b, !off);
+            c.addView(b);
+        }
+        c.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                shown = a;
+                confirmFor = null;
+                render();
+            }
+        });
+        return c;
+    }
+
+    private void askUpdateAll() {
+        if (job != null || store.indexExpired) return;
+        confirmFor = "updates";
+        render();
+    }
+
+    /** One confirmation for the whole plan: what, in which order, and what it puts at risk. */
+    private View updatesConfirm(List<Index.App> ups) {
+        LinearLayout p = panel();
+        p.addView(text("UPDATE ALL", 15, MUTED, false));
+        List<Store.Step> steps = null;
+        StringBuilder msg = new StringBuilder();
+        try {
+            steps = store.planUpdates(ups, installed);
+        } catch (Store.PlanError e) {
+            msg.append(e.getMessage());
+        }
+        if (steps != null) {
+            msg.append("One at a time, in this order: ");
+            int root = 0;
+            boolean system = false;
+            for (int i = 0; i < steps.size(); i++) {
+                Store.Step s = steps.get(i);
+                String have = installed.get(s.app.id);
+                if (i > 0) msg.append(", ");
+                msg.append(s.app.name).append(' ').append(have == null ? "(new) " + s.version.version
+                        : have + " → " + s.version.version);
+                root += s.version.review.rootServices.size();
+                system |= s.version.review.systemWrites;
+            }
+            msg.append(".\nIf one fails, the store stops there and leaves the rest as they are.");
+            if (root > 0) msg.append("\nRuns ").append(count(root, "service")).append(" as root, with full control of the head unit.");
+            if (system) msg.append("\nChanges /system files.");
+            if (root > 0 || system) msg.append(" Only update if you trust their authors.");
+        }
+        TextView t = text(msg.toString(), 16, TEXT, false);
+        t.setPadding(0, dp(6), 0, dp(10));
+        t.setLineSpacing(0, 1.1f);
+        p.addView(t);
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(Gravity.RIGHT);
+        buttons.addView(button("Cancel", new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                confirmFor = null;
+                render();
+            }
+        }));
+        final List<Store.Step> plan = steps;
+        if (plan != null && !plan.isEmpty()) {
+            TextView go = button("Update all", new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    start(plan.get(plan.size() - 1).app, plan, false, true);
+                }
+            });
+            go.setTextColor(ACCENT);
+            buttons.addView(go);
+        }
+        p.addView(buttons);
+        return p;
+    }
+
+    /** "Installed": packages the store installed that its app list doesn't have. */
+    private View installedSection(List<Index.App> apps, boolean gap) {
+        LinearLayout s = new LinearLayout(this);
+        s.setOrientation(LinearLayout.VERTICAL);
+        TextView h = section("INSTALLED");
+        if (!gap) h.setPadding(0, 0, 0, dp(2));
+        s.addView(h);
+        TextView why = text("Installed by the App Store, but not in its app list. You can still remove them.",
+                15, MUTED, false);
+        why.setPadding(0, 0, 0, dp(10));
+        s.addView(why);
+        Grid grid = new Grid(this, dp(380), dp(10));
+        for (Index.App a : apps) grid.addView(card(a));
+        s.addView(grid);
+        return s;
+    }
+
+    private ScrollView scroller(View v) {
         ScrollView sv = new ScrollView(this);
         sv.setVerticalScrollBarEnabled(false);
-        sv.addView(grid);
-        col.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+        sv.addView(v);
+        return sv;
     }
 
     private TextView chip(String label, final String cat) {
@@ -487,13 +847,25 @@ public class StoreActivity extends KiaPage {
         String text;
         int color;
         String action;
+        /** Install or Update shown but off: the index has expired. */
+        boolean blocked;
     }
 
     private State state(Index.App a) {
         State s = new State();
         String have = installed.get(a.id);
         Index.Version v = a.newestFor(firmware);
-        if (v == null) {
+        if (!listed(a)) {
+            s.text = "Not in the store";
+            s.color = MUTED;
+            if (removable(a.id)) s.action = "Remove";
+        } else if (a.retired()) {
+            // no install, no update; only Remove, for cars that have it. The reason is on its
+            // page: a card has room for one short line
+            s.text = a.withdrawn.isEmpty() ? "No longer offered" : "Withdrawn";
+            s.color = a.withdrawn.isEmpty() ? WARN : BAD;
+            if (removable(a.id)) s.action = "Remove";
+        } else if (v == null) {
             s.text = have != null ? "Installed " + have + " · no version for this firmware" : "Not made for this car's firmware";
             s.color = WARN;
         } else if (have == null) {
@@ -508,6 +880,8 @@ public class StoreActivity extends KiaPage {
             s.text = "Installed " + have;
             s.color = GOOD;
         }
+        // an expired list can't be trusted for installs (the helper refuses it too); Remove never needs it
+        s.blocked = s.action != null && !s.action.equals("Remove") && store.indexExpired;
         return s;
     }
 
@@ -539,13 +913,15 @@ public class StoreActivity extends KiaPage {
         c.addView(mid, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         if (s.action != null) {
+            final boolean remove = s.action.equals("Remove");
             TextView b = button(s.action, new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    askInstall(a);
+                    if (remove) askRemove(a);
+                    else askInstall(a);
                 }
             });
-            enable(b, job == null);
+            enable(b, job == null && !s.blocked);
             c.addView(b);
         }
         c.setOnClickListener(new View.OnClickListener() {
@@ -578,12 +954,32 @@ public class StoreActivity extends KiaPage {
         title.setText(a.name);
         final String have = installed.get(a.id);
         final Index.Version v = a.newestFor(firmware);
+        final boolean isListed = listed(a);
         State s = state(a);
-        info.setText(s.action != null && have != null ? s.text + " · installed " + have : s.text);
+        boolean onlyRemove = !isListed || a.retired();
+        info.setText(have != null && (onlyRemove || s.action != null) ? s.text + " · installed " + have : s.text);
         info.setTextColor(s.color);
 
         boolean busy = job != null;
-        if (have != null && !a.id.equals(Store.SELF)) {
+        final Index.App replacement = isListed && a.retired() && !a.replacedBy.isEmpty()
+                ? store.index.app(a.replacedBy) : null;
+        if (replacement != null && !replacement.retired()) {
+            TextView get = button("Get " + replacement.name + " instead", new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    if (state(replacement).action != null) {
+                        askInstall(replacement);
+                    } else {
+                        shown = replacement;
+                        confirmFor = null;
+                        render();
+                    }
+                }
+            });
+            enable(get, !busy);
+            headerRight.addView(get);
+        }
+        if (removable(a.id)) {
             TextView rm = button("Remove", new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
@@ -594,14 +990,14 @@ public class StoreActivity extends KiaPage {
             enable(rm, !busy);
             headerRight.addView(rm);
         }
-        if (s.action != null) {
+        if (s.action != null && !s.action.equals("Remove")) {
             TextView in = button(s.action, new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
                     askInstall(a);
                 }
             });
-            enable(in, !busy);
+            enable(in, !busy && !s.blocked);
             headerRight.addView(in);
         }
 
@@ -612,6 +1008,15 @@ public class StoreActivity extends KiaPage {
         // left: about the app
         LinearLayout left = new LinearLayout(this);
         left.setOrientation(LinearLayout.VERTICAL);
+        if (isListed && !a.withdrawn.isEmpty()) {
+            left.addView(note(BAD, "Withdrawn from the store: " + sentence(a.withdrawn)
+                    + (have != null ? " Remove it from the car." : "")));
+        } else if (isListed && a.retired()) {
+            left.addView(note(WARN, "No longer offered: " + sentence(a.deprecated)
+                    + (replacement != null ? " " + replacement.name + " takes its place." : "")));
+        } else if (s.blocked) {
+            left.addView(note(WARN, Store.OUT_OF_DATE));
+        }
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -621,7 +1026,7 @@ public class StoreActivity extends KiaPage {
         who.setPadding(dp(16), 0, 0, 0);
         TextView sum = text(a.summary, 18, TEXT, false);
         who.addView(sum);
-        who.addView(text("By " + a.author + " · " + categoryName(a.category), 15, MUTED, false));
+        if (!a.author.isEmpty()) who.addView(text("By " + a.author + " · " + categoryName(a.category), 15, MUTED, false));
         if (!a.homepage.isEmpty()) who.addView(text(a.homepage, 15, MUTED, false));
         top.addView(who, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         left.addView(top);
@@ -654,10 +1059,21 @@ public class StoreActivity extends KiaPage {
             right.addView(confirmPanel(a, v));
         }
         LinearLayout review = panel();
-        review.addView(text("WHAT IT DOES", 15, MUTED, false));
-        Index.Version rv = v != null ? v : notesFor;
-        if (rv != null) {
-            for (Object[] line : reviewLines(a, rv)) review.addView(reviewLine((Integer) line[0], (String) line[1]));
+        if (!isListed) {
+            review.addView(text("NOT IN THE STORE", 15, MUTED, false));
+            TextView t = text((store.index == null ? "The App Store has no app list right now. "
+                    : "The App Store's list doesn't have this package any more. ")
+                    + "The App Store installed it, so it can still remove it.", 16, TEXT, false);
+            t.setPadding(0, dp(6), 0, 0);
+            t.setLineSpacing(0, 1.1f);
+            review.addView(t);
+            review.addView(reviewLine(IDLE, "Package " + a.id + (have != null ? " " + have : "")));
+        } else {
+            review.addView(text("WHAT IT DOES", 15, MUTED, false));
+            Index.Version rv = v != null ? v : notesFor;
+            if (rv != null) {
+                for (Object[] line : reviewLines(a, rv)) review.addView(reviewLine((Integer) line[0], (String) line[1]));
+            }
         }
         right.addView(review);
         ScrollView rs = new ScrollView(this);
@@ -833,6 +1249,12 @@ public class StoreActivity extends KiaPage {
             if (n[0].equals(c)) return n[1];
         }
         return c;
+    }
+
+    /** A reason as a sentence, for text that goes on after it. */
+    private static String sentence(String s) {
+        s = s.trim();
+        return s.isEmpty() || s.endsWith(".") || s.endsWith("!") || s.endsWith("?") ? s : s + ".";
     }
 
     private static String count(int n, String what) {

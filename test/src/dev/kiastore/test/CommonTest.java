@@ -21,6 +21,7 @@ public final class CommonTest {
         versions();
         json();
         nemesisData();
+        retirement();
         vectors(new File(args[0]));
         System.out.println("ok: " + passed + " checks");
     }
@@ -66,6 +67,21 @@ public final class CommonTest {
     private static void nemesisData() {
         NemesisData d = new NemesisData("[nemesis]\nversion=1.4\nid=ev6.fixes\ntypes=application,service\n\n[app.0]\nkind=apk\n");
         check(d.id().equals("ev6.fixes") && d.version().equals("1.4") && d.get("app.0", "kind").equals("apk"), "NEMESIS.data");
+    }
+
+    private static void retirement() {
+        String v = "\"versions\":[{\"version\":\"1.0\",\"firmware\":[\"*\"]}]";
+        Index i = new Index(Json.parseObject("{\"format\":1,\"sequence\":3,\"apps\":["
+                + "{\"id\":\"a\"," + v + "},"
+                + "{\"id\":\"b\",\"deprecated\":\"Built into a now.\",\"replaced_by\":\"a\"," + v + "},"
+                + "{\"id\":\"c\",\"deprecated\":\"Old.\",\"withdrawn\":\"Unsafe.\"," + v + "},"
+                + "{\"id\":\"d\",\"withdrawn\":true," + v + "}]}"));
+        Index.App a = i.app("a"), b = i.app("b"), c = i.app("c"), d = i.app("d");
+        check(!a.retired() && a.deprecated.isEmpty() && a.replacedBy.isEmpty(), "not retired");
+        check(b.retired() && b.replacedBy.equals("a") && b.retiredReason().equals("Built into a now."), "deprecated");
+        check(b.versions.size() == 1, "a retired app keeps its versions");
+        check(c.retired() && c.retiredReason().equals("Unsafe."), "withdrawn wins");
+        check(d.retired() && !d.withdrawn.isEmpty(), "a malformed withdrawn still retires");
     }
 
     private static void vectors(File dir) throws Exception {

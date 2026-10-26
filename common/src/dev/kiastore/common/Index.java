@@ -17,7 +17,22 @@ public final class Index {
     public static final class App {
         public String id, name, summary, description, author, homepage, category;
         public String iconUrl, iconSha256;
+        /**
+         * Retirement (empty when not retired): the reason it is no longer offered, the reason
+         * it was pulled for safety, and the id of the app that takes its place.
+         */
+        public String deprecated = "", withdrawn = "", replacedBy = "";
         public final List<Version> versions = new ArrayList<Version>();
+
+        /** A retired app is never installed or updated; cars that have it can only remove it. */
+        public boolean retired() {
+            return !deprecated.isEmpty() || !withdrawn.isEmpty();
+        }
+
+        /** Why it's retired, withdrawal first. */
+        public String retiredReason() {
+            return !withdrawn.isEmpty() ? withdrawn : deprecated;
+        }
 
         /** The newest version that fits this firmware, or null. */
         public Version newestFor(String firmware) {
@@ -85,6 +100,12 @@ public final class Index {
             Map<String, Object> icon = Json.obj(a, "icon");
             app.iconUrl = Json.str(icon, "url");
             app.iconSha256 = Json.str(icon, "sha256").toLowerCase();
+            app.deprecated = Json.str(a, "deprecated").trim();
+            app.withdrawn = Json.str(a, "withdrawn").trim();
+            app.replacedBy = Json.str(a, "replaced_by").trim();
+            // fail closed: a retirement field that isn't a plain string still retires the app
+            if (app.deprecated.isEmpty() && a.containsKey("deprecated")) app.deprecated = "No longer offered.";
+            if (app.withdrawn.isEmpty() && a.containsKey("withdrawn")) app.withdrawn = "Withdrawn from the store.";
             if (app.id.isEmpty()) continue;
             if (app.name.isEmpty()) app.name = app.id;
             for (Object vo : Json.list(a, "versions")) {

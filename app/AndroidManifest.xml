@@ -7,7 +7,8 @@
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="19" />
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- requests, downloads and results are shared with the root helper through /sdcard/kia-store -->
+    <!-- downloads, results and status are shared with the root helper through /sdcard/kia-store;
+         requests are not: the helper reads them from RequestProvider -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <application
@@ -31,5 +32,10 @@
             <meta-data android:name="dev.kiamenu.icon" android:resource="@drawable/menu_icon" />
             <meta-data android:name="dev.kiamenu.icon_disabled" android:resource="@drawable/menu_icon_dis" />
         </activity>
+        <!-- the requests the driver confirmed, for the root helper only (see RequestProvider) -->
+        <provider
+            android:name=".RequestProvider"
+            android:authorities="dev.kiastore.requests"
+            android:exported="true" />
     </application>
 </manifest>
