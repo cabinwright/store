@@ -54,7 +54,7 @@ jobs:
 
       - name: Signing key
         env:
-          KEYSTORE_B64: ${{ secrets.CABINWRIGHT_KEYSTORE_B64 || secrets.KIAMENU_KEYSTORE_B64 }}
+          KEYSTORE_B64: ${{ secrets.CABINWRIGHT_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
@@ -77,7 +77,7 @@ jobs:
 
       - name: Build
         env:
-          CABINWRIGHT_KEYSTORE_PASS: ${{ secrets.CABINWRIGHT_KEYSTORE_PASS || secrets.KIAMENU_KEYSTORE_PASS }}
+          CABINWRIGHT_KEYSTORE_PASS: ${{ secrets.CABINWRIGHT_KEYSTORE_PASS }}
         run: |
           CABINWRIGHT_MENU=$PWD/menu sh build.sh
           CABINWRIGHT_MENU=$PWD/menu CABINWRIGHT_APPS=$PWD/apps sh test/test.sh
