@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Makes a signed debug index for testing cabinwright.store on a car, without GitHub.
 
-usage: debug-index.py <out dir> <apps.json> --sequence N [--key ~/.config/kia-store/kia-store-test.pem]
+usage: debug-index.py <out dir> <apps.json> --sequence N [--key ~/.config/cabinwright/store-test.pem]
                       [--base file:///sdcard/cabinwright/store-debug/] [--expires-days 90]
 
 <apps.json> is a list of apps in the apps/<id>.json format, except that each version names a
@@ -29,7 +29,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-KEY_ID = "kia-store-test"
+KEY_ID = "store-test"
 
 
 def review(zpath):
@@ -58,7 +58,7 @@ def main():
     ap.add_argument("out")
     ap.add_argument("apps")
     ap.add_argument("--sequence", type=int, required=True)
-    ap.add_argument("--key", default=str(Path("~/.config/kia-store/kia-store-test.pem").expanduser()))
+    ap.add_argument("--key", default=str(Path("~/.config/cabinwright/store-test.pem").expanduser()))
     ap.add_argument("--base", default="file:///sdcard/cabinwright/store-debug/")
     ap.add_argument("--expires-days", type=float, default=90)
     a = ap.parse_args()

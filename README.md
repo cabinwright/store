@@ -10,7 +10,7 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
 | `app/` | The store app (`dev.cabinwright.store`): the head unit's look via the Cabinwright API's `CarPage`, day and night. |
 | `helper/` | The root helper service. It does every install and removal, and checks everything again itself. |
 | `common/` | Shared by both: index signature check (RSA-3072, SHA256withRSA, pinned keys), sequence and expiry checks, JSON, versions. |
-| `keys/` | The pinned index public keys (`kia-apps-2026a`, backup `kia-apps-2026b`). |
+| `keys/` | The pinned index public keys (`cabinwright-2026a`, backup `cabinwright-2026b`). |
 | `test/` | Host tests (`test/test.sh`), including the index repo's signature test vectors. |
 
 ## How it stays safe
@@ -36,16 +36,6 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
   Helpers before 1.1 kept no record; the first 1.1 helper seeds it once from the verified,
   unexpired index (installed packages it lists) and logs what it added.
 - With an expired index, nothing is installed or updated; removing still works.
-
-## Moving from kia.store
-
-This project used to be called kia-store (NEMESIS package `kia.store`, app `dev.kiastore`).
-`cabinwright.store` installs beside it. Its helper imports kia.store's record
-(`/data/nemesis/kia-store/state.json`, read only), with `kia.menu` and `kia.tweaks` recorded
-under their new ids, and waits while kia.store's helper still runs, so only one helper acts at a
-time. Then remove kia.store (it has no install hooks). [docs/migrating-from-kia.md](docs/migrating-from-kia.md)
-has the whole switch for a car, and `tools/migrate-from-kia.sh` does it over ADB (a dry run
-unless `--apply`).
 
 ## Build
 

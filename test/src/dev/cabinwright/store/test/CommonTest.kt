@@ -197,7 +197,7 @@ object CommonTest {
             true
         }
 
-    /** kia-apps-2026a's public key: a real key that did not sign the test vectors. */
+    /** cabinwright-2026a's public key: a real key that did not sign the test vectors. */
     private const val OTHER_KEY = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAs4LDzXGPHuhH+Dl7IvxM" +
         "gJ/ogDxSHCZAe+5rPS+qjDwMQqF6EUz9KVE739+TZcCnoEMdLf/Pd8SiV0v8ChX3" +
         "i+Jx1iRhrZvfU8h1wVP8wweMMqjoOifYVCgpesJW32QJe8RriBjFUJK54RahRepy" +
