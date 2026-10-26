@@ -29,14 +29,28 @@ jobs:
           repository: cabinwright/apps
           path: apps
 
-      # before setup-java: the runner's sdkmanager needs its default (newer) Java
+      # before setup-java: the runner's sdkmanager needs its default (newer) Java.
+      # Only build-tools: android.jar (API 19) comes from the menu's fetch-tools.sh with the rest
       - name: Android SDK parts
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;29.0.2" "platforms;android-23" > /dev/null
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;29.0.2" > /dev/null
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '11'
+
+      # Kotlin, R8, android-19.jar, ktlint, detekt, shellcheck: pinned in the menu's fetch-tools.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/cabinwright-tools
+          key: cabinwright-tools-${{ runner.os }}-${{ hashFiles('menu/api/tools/fetch-tools.sh') }}
+
+      - name: Tools
+        run: sh menu/api/tools/fetch-tools.sh
+
+      # with the menu's settings; lint.sh skips nested checkouts (menu/, apps/)
+      - name: Lint
+        run: sh menu/api/tools/lint.sh .
 
       - name: Signing key
         env:
@@ -66,13 +80,17 @@ jobs:
           CABINWRIGHT_KEYSTORE_PASS: ${{ secrets.CABINWRIGHT_KEYSTORE_PASS }}
         run: |
           CABINWRIGHT_MENU=$PWD/menu sh build.sh
-          CABINWRIGHT_APPS=$PWD/apps sh test/test.sh
+          CABINWRIGHT_MENU=$PWD/menu CABINWRIGHT_APPS=$PWD/apps sh test/test.sh
           mv dist/cabinwright.store.zip "dist/cabinwright.store-v$VERSION.zip"
+          mv dist/cabinwright.store.map "dist/cabinwright.store-v$VERSION.map"
+          mv dist/cabinwright.store.helper.map "dist/cabinwright.store-v$VERSION.helper.map"
 
       - uses: actions/upload-artifact@v4
         with:
           name: cabinwright.store-v${{ env.VERSION }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.map
 
       - name: Release
         if: github.ref_type == 'tag'
@@ -82,9 +100,11 @@ jobs:
           cat > "$RUNNER_TEMP/notes.md" <<NOTES
           NEMESIS package \`cabinwright.store\` $VERSION: install \`cabinwright.store-v$VERSION.zip\` with NEMESIS
           (USB stick, or \`nemesis install --update <zip>\` over ADB).
+          \`cabinwright.store-v$VERSION.map\` (the app) and \`cabinwright.store-v$VERSION.helper.map\` (the root
+          helper) are R8's name maps, for reading their stack traces (retrace).
 
           The App Store shows up in All Menus with the Cabinwright launcher hook installed. It installs
           packages from the signed [cabinwright/apps](https://github.com/cabinwright/apps) index.
           NOTES
-          gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Cabinwright store $GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.map --title "Cabinwright store $GITHUB_REF_NAME" \
             --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
