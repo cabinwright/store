@@ -48,8 +48,9 @@ For `app` and `tweaks` packages the installer never gives NEMESIS the package's 
 `NEMESIS.data`. After the size and SHA-256 checks against the signed index it rebuilds the zip
 in its private directory:
 
-1. It keeps `*.apk` at the top level, plus `tweaks/<id>/**` and `lib/**` for `tweaks`. Anything
-   else fails the install rather than being dropped silently, since the index check already
+1. It keeps `*.apk` at the top level, plus `tweaks/<id>/**` and `lib/**` for `tweaks`. The
+   package's own `NEMESIS.data` is read for nothing and replaced (CI reads the version from
+   it). Anything else fails the install rather than being dropped silently, since the index check already
    promised what the zip holds.
 2. It writes a new `NEMESIS.data`: `[nemesis]` with `id`, `name`, `version` and `types` from the
    index entry, and one `[app.N]` per APK with `kind=apk`, `path`, `package` and `component` read
@@ -90,15 +91,41 @@ Each `need=` line is `<need> | <reason>`, the reason in plain words for the driv
 
 | Need | Allows | kt commands |
 |---|---|---|
-| `file:<path>@<md5>[,<md5>…]` | replace that file when it is exactly one of those stock versions | `kt file replace <path> <new>` |
+| `file:<path>@<version>[,<version>…]` | replace that file when its original is exactly one of those versions: an md5, `absent` (the file may be created) or `link:<target>` (a symlink) | `kt file replace [--under] <path> <new> [<mode>]`, `kt file adopt`, `kt file original` |
 | `prop:<name>` | set that property | `kt prop set <name> <value>` |
 | `setting:<table>/<name>` | change that Android setting | `kt setting put <table> <name> <value>` |
 | `service:<name>` | start or stop that init service | `kt service start\|stop <name>` |
 | `kill:<process>` | restart that process | `kt kill <process>` |
+| `logs:<tag>` | read that log tag | `kt logcat <tag>:<priority>` |
 | `binder:<service> <codes>` | those binder transaction codes | `kt binder <service> <code> <args…>` (`service call` syntax) |
 | `root` | anything (red warning; first-party review only) | `kt root <command>` |
 
 Reads need no declaration: `kt prop get`, `kt setting get`, `kt file md5 <path>`, `kt ps`.
+
+Details of the `kt` commands:
+
+- `kt file replace <path> <new> [<mode>]`: the new file gets `<mode>`, else the original's mode
+  and owner, else 0644 root:root for a created file. Undo restores the original exactly: deletes
+  a created file, puts a symlink back as a symlink.
+- **Two tweaks may change one file.** The runner keeps a stack of layers per file. A replace
+  checks the file's *original* (the bottom of the stack) against the need's versions, not its
+  current content. Turning a tweak off removes its layer: if it is on top, the layer below
+  comes back; if it is lower down, the layer above it takes over its original. `--under` puts
+  the new layer below the other tweaks' layers. "Changed by something else" compares only the
+  top layer.
+- `kt file original <path> <dest>` copies the stock original of a declared file into
+  `$TWEAK_DATA`.
+- `kt file adopt <path> <original>|absent` and `kt prop adopt <name> <previous>` take over a
+  change something else already made: they record the original without changing anything, so
+  turning the tweak off restores it. The `<original>` file must be one of the need's declared
+  versions; cabinwrightd reads it as root. `kt prop adopt` does nothing if this tweak already
+  recorded that property.
+- `kt logcat <tag>:<priority>` streams that tag's lines until the caller exits (one connection,
+  frames until it closes).
+- `kt kill`: NEMESIS gives services root without CAP_KILL, so cabinwrightd sends the signal as
+  the target process's own uid.
+- Restoring a property that was unset deletes `/data/property/<name>` rather than setting it
+  to an empty value.
 
 `kt keep <need>` (only from `disable.sh`) drops the journal entries for one of the tweak's own
 needs, so turning the tweak off leaves that value as it is instead of restoring it. auto-dst
@@ -191,8 +218,9 @@ zip's tweak.conf files). A version without `tier` isn't installed. An index entr
   `LocalSocket.getPeerCredentials()`), never by anything in the request. Abstract sockets have
   no permissions, so every app can connect: identity is the only gate.
 - uid → package through `/data/system/packages.list`; the package's current certificate
-  through PackageManager (a system context under app_process), compared with the SHA-256
-  recorded at install. A uid shared by several packages is refused. Callers that aren't
+  from `/data/system/packages.xml`, compared with the certificate recorded at install (read
+  from the APK's own signature in the package zip). The store app itself is checked against
+  `store.apk` in the installed cabinwright.store package. A uid shared by several packages is refused. Callers that aren't
   store-installed packages, the store app, or a running tweak's uid get `unknown_caller`.
 - Request: `{"v":1,"cap":"tweaks","op":"set","args":{"id":"auto-dst","on":true}}`.
   Response: `{"ok":true,"data":…}` or `{"ok":false,"error":"<code>","message":"<plain words>"}`.
@@ -213,7 +241,22 @@ Operations:
 | `logs` | `read` | `{filter?, lines?}` → `{lines}` |
 | `settings` | `get`/`put` | `{table, name, value?}` |
 | `root` | `exec` | `{command, timeout_ms?}` → `{code, stdout, stderr}` |
-| `store` | (store app only) | `install`/`uninstall` return a `request_id` at once; `status` reports progress and results. Also `agree`, `revoke`, `grants`, `prompt_answer`, `resume_tweaks`, `lockdown` |
+| `store` | `install` | `{id, version}` → `{request_id}`. The app calls it only after the driver confirmed the version's capabilities and needs (from the verified index); that confirmation is the agreement. The daemon reads `index.json`, `index.json.sig` and `downloads/<id>-<version>.zip` from `/sdcard/cabinwright/store/` |
+| `store` | `uninstall` | `{id}` → `{request_id}`; only packages the store installed |
+| `store` | `status` | → `{busy, firmware, sequence, debug, lockdown, safe_mode, packages: [{id, name, version, types, tier, store_installed}], requests: [{request_id, op, id, version, state: working\|ok\|failed, step, message, log}]}` (the last 20 requests) |
+| `store` | `grants` | `{id?}` → `{packages: {<id>: {<cap>: {state, reason, last_used}}}}` |
+| `store` | `grant_set` | `{id, cap, on}` → `{}` |
+| `store` | `prompt_answer` | `{request_id, choice: once\|session\|always\|deny}` → `{}` |
+| `store` | `resume_tweaks` | → `{}`: leaves safe mode |
+| `store` | `lockdown` | `{on?}` → `{on}` |
+| `store` | `log` | `{id}` → `{lines}`: that package's root commands and prompts |
+
+Formats: times (`last_used`) are seconds since the epoch; `lines` and `log` are lists of
+strings; `requests` are oldest first. Grant states are `agreed`, `always`, `session`, `deny` and
+`off`; `grant_set` with `on: true` puts any of them back to `agreed` (prompting capabilities ask
+again). A request that is cut off by the daemon restarting during a cabinwright.store update
+is finished by the new daemon from `pending.json` and keeps its `request_id`. The `system`
+allowlist is checked by the daemon; the app's copy only hides what would be refused.
 
 `kt` talks to the same socket with `cap: "kt"`, identified by its tweak uid.
 `kt` is a small Kotlin program run with app_process (like `cabinwrightd`); `cabinwrightd`
@@ -259,6 +302,8 @@ settled with NEMESIS's maintainer.
 | `/data/nemesis/cabinwright/backup/<tweak>/` | original files |
 | `/data/nemesis/cabinwright/tweakdata/<tweak>/` | `$TWEAK_DATA` |
 | `/data/nemesis/cabinwright/log/` | broker and runner logs, rotated |
+| `/data/nemesis/cabinwright/debug-index` | test builds only: the URL of a debug index (root-only) |
+| `/data/nemesis/cabinwright/vehicle.json` | root-only: the gear probe for "parked" |
 
 The daemon has no network access, so the store app downloads the index, its signature and
 package zips to `/sdcard/cabinwright/store/` and the daemon verifies them itself (signature,

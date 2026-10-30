@@ -74,12 +74,19 @@ class Need private constructor(
         const val SETTING = "setting"
         const val SERVICE = "service"
         const val KILL = "kill"
+        const val LOGS = "logs"
         const val BINDER = "binder"
         const val ROOT = "root"
         private val NAME = Regex("^[A-Za-z0-9._:-]+$")
         private val PATH = Regex("^/[A-Za-z0-9._/-]+$")
         private val MD5 = Regex("^[0-9a-f]{32}$")
         private val CODE = Regex("^[0-9]+$")
+        private val LINK = Regex("^link:(/?[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$")
+        private val TAG = Regex("^[A-Za-z0-9._-]+$")
+
+        /** A file need's version: a stock md5, `absent`, or `link:<target>`. */
+        private fun version(v: String): Boolean =
+            MD5.matches(v) || v == "absent" || (LINK.matches(v) && !v.contains(".."))
 
         fun parse(line: String): Need {
             val bar = line.indexOf('|')
@@ -93,16 +100,10 @@ class Need private constructor(
             val type = spec.substring(0, colon)
             val rest = spec.substring(colon + 1)
             return when (type) {
-                FILE -> {
-                    val at = rest.lastIndexOf('@')
-                    require(at > 0) { "need: file without stock md5: $spec" }
-                    val path = rest.substring(0, at)
-                    val sums = rest.substring(at + 1).parts(',')
-                    require(PATH.matches(path) && !path.contains("/../") && !path.endsWith("/..")) {
-                        "need: bad path: $spec"
-                    }
-                    require(sums.isNotEmpty() && sums.all { MD5.matches(it) }) { "need: bad md5: $spec" }
-                    Need(spec, reason, type, path, sums)
+                FILE -> file(spec, reason, rest)
+                LOGS -> {
+                    require(TAG.matches(rest)) { "need: bad log tag: $spec" }
+                    Need(spec, reason, type, rest, ArrayList())
                 }
                 PROP, SERVICE, KILL -> {
                     require(NAME.matches(rest)) { "need: bad name: $spec" }
@@ -129,6 +130,18 @@ class Need private constructor(
                 }
                 else -> throw IllegalArgumentException("need: unknown type: $spec")
             }
+        }
+
+        private fun file(spec: String, reason: String, rest: String): Need {
+            val at = rest.lastIndexOf('@')
+            require(at > 0) { "need: file without a stock version: $spec" }
+            val path = rest.substring(0, at)
+            val sums = rest.substring(at + 1).parts(',')
+            require(PATH.matches(path) && !path.contains("/../") && !path.endsWith("/..")) {
+                "need: bad path: $spec"
+            }
+            require(sums.isNotEmpty() && sums.all { version(it) }) { "need: bad version: $spec" }
+            return Need(spec, reason, FILE, path, sums)
         }
 
         private val TABLES = setOf("system", "secure", "global")

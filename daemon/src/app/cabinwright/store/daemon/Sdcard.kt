@@ -1,4 +1,4 @@
-package app.cabinwright.store.helper
+package app.cabinwright.store.daemon
 
 import app.cabinwright.store.common.parts
 import java.io.ByteArrayOutputStream

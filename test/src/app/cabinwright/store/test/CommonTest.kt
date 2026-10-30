@@ -1,5 +1,6 @@
 package app.cabinwright.store.test
 
+import app.cabinwright.store.common.Axml
 import app.cabinwright.store.common.Callers
 import app.cabinwright.store.common.Grants
 import app.cabinwright.store.common.Index
@@ -34,6 +35,7 @@ object CommonTest {
         callers()
         grants()
         vectors(File(args[0]))
+        axml(File(args[0], "../fixtures/edit-menu.AndroidManifest.xml"))
         println("ok: $passed checks")
     }
 
@@ -67,6 +69,15 @@ object CommonTest {
         )
         check(conf.needs[2].target == "/system/priv-app/SystemUI.apk" && conf.needs[2].allowed.size == 1, "file md5")
         check(Need.parse("root | Anything").covers("kill", "x"), "root covers all")
+        val created = Need.parse("file:/system/lib/libev6aac.so@absent | Add it")
+        check(created.allowed == listOf("absent"), "file may be created")
+        check(
+            Need.parse("file:/system/bin/ifconfig@link:toolbox | Wrap it").allowed == listOf("link:toolbox"),
+            "symlink version",
+        )
+        check(Need.parse("logs:AAProjection | Watch it").covers("logs", "AAProjection"), "logs need")
+        check(refused { Need.parse("file:/system/bin/x@link:../../data/x | up") }, "link target escaping")
+        check(refused { Need.parse("logs:A B | t") }, "bad log tag")
         for (bad in listOf(
             "name=x\nkind=service\nfirmware=*\nrisk=system\n",
             "name=x\nkind=thing\nfirmware=*\n",
@@ -285,6 +296,13 @@ object CommonTest {
         check(b.versions.size == 1, "a retired app keeps its versions")
         check(c.retired() && c.retiredReason() == "Unsafe.", "withdrawn wins")
         check(d.retired() && d.withdrawn.isNotEmpty(), "a malformed withdrawn still retires")
+    }
+
+    private fun axml(f: File) {
+        val m = Axml(Files.readAllBytes(f.toPath()))
+        check(m.pkg == "app.cabinwright.menu", "manifest package: " + m.pkg)
+        check(m.launcher.startsWith("app.cabinwright.menu/"), "launcher activity: " + m.launcher)
+        check(refused { Axml(ByteArray(16)) }, "not binary xml")
     }
 
     private fun read(dir: File, name: String): ByteArray = Files.readAllBytes(File(dir, name).toPath())
