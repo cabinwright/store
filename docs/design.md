@@ -97,6 +97,7 @@ Each `need=` line is `<need> | <reason>`, the reason in plain words for the driv
 | `service:<name>` | start or stop that init service | `kt service start\|stop <name>` |
 | `kill:<process>` | restart that process | `kt kill <process>` |
 | `logs:<tag>` | read that log tag | `kt logcat <tag>:<priority>` |
+| `dump:<service>` | read that binder service's state | `kt dump <service>` |
 | `binder:<service> <codes>` | those binder transaction codes | `kt binder <service> <code> <args…>` (`service call` syntax) |
 | `root` | anything (red warning; first-party review only) | `kt root <command>` |
 

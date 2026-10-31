@@ -75,6 +75,7 @@ class Need private constructor(
         const val SERVICE = "service"
         const val KILL = "kill"
         const val LOGS = "logs"
+        const val DUMP = "dump"
         const val BINDER = "binder"
         const val ROOT = "root"
         private val NAME = Regex("^[A-Za-z0-9._:-]+$")
@@ -105,7 +106,7 @@ class Need private constructor(
                     require(TAG.matches(rest)) { "need: bad log tag: $spec" }
                     Need(spec, reason, type, rest, ArrayList())
                 }
-                PROP, SERVICE, KILL -> {
+                PROP, SERVICE, KILL, DUMP -> {
                     require(NAME.matches(rest)) { "need: bad name: $spec" }
                     Need(spec, reason, type, rest, ArrayList())
                 }

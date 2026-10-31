@@ -82,6 +82,7 @@ esac
     # the car's toolbox chmod: octal modes only
     script(STUBS / "chmod", 'm=$1; [ "$m" = -R ] && m=$2\ncase "$m" in *[!0-7]*) echo "Bad mode"; exit 10 ;; esac\nexec /bin/chmod "$@"\n')
     script(STUBS / "getprop", 'echo CVEV.USA.0000.V015.012.260507\n')
+    script(STUBS / "dumpsys", 'echo "dumped $1"\n')
     script(STUBS / "service", f'echo "$*" >> {R}/binder.log\necho "Result: Parcel(00000000 00000001   \'........\')"\n')
     script(STUBS / "am", f'echo "$*" >> {R}/am.log\n')
     script(STUBS / "logcat", 'case "$*" in *-T*) echo "Unrecognized Option" >&2; exit 1 ;; esac\necho "I/x( 1): a log line"\n')  # Android 4.4's: no -T
@@ -363,9 +364,9 @@ check(store("prompt_answer", {"request_id": "nope", "choice": "always"})["error"
 
 print("tweaks")
 TARGET = R / "data/demo-file"
-NEEDS = {"demo": [("binder:com.hkmc.demo 3", "Reads the demo"), (f"file:{TARGET}@absent", "Writes the demo")]}
+NEEDS = {"demo": [("binder:com.hkmc.demo 3", "Reads the demo"), ("dump:com.hkmc.demo", "Reads the demo's state"), (f"file:{TARGET}@absent", "Writes the demo")]}
 conf = ("name=Demo\nsummary=s\ndescription=d\nfirmware=*\nkind=oneshot\ndefault=off\n"
-        f"need=binder:com.hkmc.demo 3 | Reads the demo\nneed=file:{TARGET}@absent | Writes the demo\n")
+        f"need=binder:com.hkmc.demo 3 | Reads the demo\nneed=dump:com.hkmc.demo | Reads the demo's state\nneed=file:{TARGET}@absent | Writes the demo\n")
 tw = package("tw.zip", {"NEMESIS.data": "[nemesis]\nid=example.tools\nversion=1\n", "tools.apk": tools_apk.read_bytes(), "tweaks/demo/tweak.conf": conf,
                         "tweaks/demo/enable.sh": "kt binder com.hkmc.demo 3 i32 1\n",
                         "tweaks/demo/disable.sh": "echo off\n",
@@ -424,6 +425,8 @@ def kt(*argv):
 
 check(kt("file", "md5", "/data/nemesis/elsewhere")["data"]["code"] == 1, "a read it can't make fails without counting against the tweak")
 check(kt("binder", "com.hkmc.demo", "9")["data"]["code"] == 70, "kt refuses a code the tweak didn't declare")
+check(kt("dump", "com.hkmc.demo")["data"]["stdout"] == "dumped com.hkmc.demo\n", "kt dump reads a declared service")
+check(kt("dump", "com.hkmc.other")["data"]["code"] == 70, "kt dump refuses a service the tweak didn't declare")
 check(kt("file", "replace", str(TARGET), str(W / "payload"), "6755")["data"]["code"] == 64, "kt won't make a setuid file")
 check(not TARGET.exists(), "and wrote nothing")
 check(kt("keep", "binder:com.hkmc.demo 3")["data"]["code"] == 64, "kt keep is refused outside disable.sh")
