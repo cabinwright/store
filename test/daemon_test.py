@@ -197,9 +197,9 @@ def request(rid, timeout=20):
     return {"state": "timeout", "message": ""}
 
 
-def install(id_, version):
+def install(id_, version, timeout=20):
     r = store("install", {"id": id_, "version": version})
-    return request(r["data"]["request_id"])
+    return request(r["data"]["request_id"], timeout)
 
 
 def wait(cond, timeout=15):
@@ -462,7 +462,7 @@ hog = package("tw3.zip", {"NEMESIS.data": "x", "tools.apk": tools_apk.read_bytes
                           "tweaks/demo/enable.sh": "true\n",
                           "tweaks/demo/status.sh": "exec >/dev/null 2>&1\nexec sleep 300\n"})
 publish([entry("example.tools", "3", hog, "tweaks", caps, NEEDS)], {"example.tools-3.zip": hog})
-check(install("example.tools", "3")["state"] == "ok", "a tweak whose status.sh closes its output and hangs installs")
+check(install("example.tools", "3", 60)["state"] == "ok", "a tweak whose status.sh closes its output and hangs installs")
 call(TWEAK_APP_UID, "tweaks", "set", {"id": "demo", "on": True})
 print("removing")
 q = request(store("uninstall", {"id": "example.tools"})["data"]["request_id"], 60)
