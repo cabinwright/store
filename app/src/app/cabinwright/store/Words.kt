@@ -146,6 +146,8 @@ internal fun capabilityWords(cap: String): String = when (cap) {
     "tweaks" -> "see and switch your tweaks"
     "logs" -> "read the car's logs"
     "settings" -> "change system settings"
+    "vehicle" -> "read the car's state and battery levels"
+    "conditioning" -> "start and stop battery conditioning"
     "root" -> "run commands as root"
     else -> "use \"$cap\""
 }

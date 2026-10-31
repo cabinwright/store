@@ -10,7 +10,7 @@ package app.cabinwright.store.common
  * and refused: always refused until changed in the store), "off" (switched off in the store).
  */
 object Grants {
-    val KNOWN = setOf("tweaks", "logs", "settings", "root")
+    val KNOWN = setOf("tweaks", "logs", "settings", "vehicle", "conditioning", "root")
 
     /** Capabilities that ask the driver the first time an app uses them. */
     val PROMPTING = setOf("logs", "root")

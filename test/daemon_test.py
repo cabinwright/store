@@ -83,7 +83,7 @@ esac
     script(STUBS / "chmod", 'm=$1; [ "$m" = -R ] && m=$2\ncase "$m" in *[!0-7]*) echo "Bad mode"; exit 10 ;; esac\nexec /bin/chmod "$@"\n')
     script(STUBS / "getprop", 'echo CVEV.USA.0000.V015.012.260507\n')
     script(STUBS / "dumpsys", 'echo "dumped $1"\n')
-    script(STUBS / "service", f'echo "$*" >> {R}/binder.log\necho "Result: Parcel(00000000 00000001   \'........\')"\n')
+    script(STUBS / "service", f'echo "$*" >> {R}/binder.log\ncase "$*" in "call com.hkmc.micom.bcm 109") v=$(cat {R}/indicator 2>/dev/null); echo "Result: Parcel(00000000 0000000${{v:-0}}   \'........\')" ;; "call tm_hscan_service 74") echo "Result: Parcel(00000000 42870000   \'........\')" ;; *) echo "Result: Parcel(00000000 00000001   \'........\')" ;; esac\n')
     script(STUBS / "am", f'echo "$*" >> {R}/am.log\n')
     script(STUBS / "logcat", 'case "$*" in *-T*) echo "Unrecognized Option" >&2; exit 1 ;; esac\necho "I/x( 1): a log line"\n')  # Android 4.4's: no -T
 
@@ -372,7 +372,7 @@ tw = package("tw.zip", {"NEMESIS.data": "[nemesis]\nid=example.tools\nversion=1\
                         "tweaks/demo/disable.sh": "echo off\n",
                         "tweaks/demo/status.sh": "echo on running\n",
                         "lib/x": "x\n"})
-caps = {"tweaks": "Shows your tweaks"}
+caps = {"tweaks": "Shows your tweaks", "vehicle": "Shows the battery", "conditioning": "Starts conditioning"}
 publish([entry("example.tools", "1", tw, "tweaks", caps, {"demo": [("binder:com.hkmc.demo 9", "Something else")]})], {"example.tools-1.zip": tw})
 q = install("example.tools", "1")
 check(q["state"] == "failed" and "didn't review" in q["message"], "needs that differ from the review fail the install: " + q["message"])
@@ -430,6 +430,23 @@ check(kt("dump", "com.hkmc.other")["data"]["code"] == 70, "kt dump refuses a ser
 check(kt("file", "replace", str(TARGET), str(W / "payload"), "6755")["data"]["code"] == 64, "kt won't make a setuid file")
 check(not TARGET.exists(), "and wrote nothing")
 check(kt("keep", "binder:com.hkmc.demo 3")["data"]["code"] == 64, "kt keep is refused outside disable.sh")
+s = call(TWEAK_APP_UID, "vehicle", "state")["data"]
+check(s["ready"] is True and s["battery_12v"] == 1 and s["battery_main"] == 67.5, "vehicle state decodes the car's replies")
+check(call(APP_UID, "conditioning", "start")["error"] == "not_granted", "conditioning needs its capability")
+(R / "indicator").write_text("1")
+check(call(TWEAK_APP_UID, "conditioning", "start")["error"] == "failed", "conditioning won't start while the car already is")
+(R / "indicator").write_text("0")
+r = call(TWEAK_APP_UID, "conditioning", "start")
+check(r["data"]["phase"] == "waiting", "a start waits for the car; a reply isn't activation")
+check("call com.hkmc.micom.hev 62 i32 2 i32 3" in (R / "binder.log").read_text(), "the start reached the car")
+check(call(TWEAK_APP_UID, "conditioning", "status")["data"]["phase"] == "waiting", "and it stays waiting until the car says active")
+(R / "indicator").write_text("1")
+check(wait(lambda: call(TWEAK_APP_UID, "conditioning", "status")["data"]["phase"] == "active", 12), "only the car's indicator makes it active")
+log_now = (R / "binder.log").read_text().count("call com.hkmc.micom.hev 65 i32 9")
+check(wait(lambda: (R / "binder.log").read_text().count("call com.hkmc.micom.hev 65 i32 9") > log_now, 12), "the daemon keeps refreshing the request")
+(R / "indicator").write_text("0")
+check(wait(lambda: call(TWEAK_APP_UID, "conditioning", "status")["data"]["ended"] == "finished", 12), "the car finishing ends the session")
+check(wait(lambda: "call com.hkmc.micom.hev 62 i32 0 i32 0" in (R / "binder.log").read_text()), "and the request is withdrawn")
 big = call(TWEAK_APP_UID, "tweaks", "set", {"id": "x" * 1048000, "on": True})
 check(not big["ok"], "a reply over the frame limit is an error, not a crash")
 held = []

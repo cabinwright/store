@@ -28,6 +28,7 @@ object Cabinwrightd {
         // first: NEMESIS can run two copies across an update, and only one may touch the car
         val server = bind()
         log("cabinwrightd $VERSION running")
+        VehicleOps.recover()
         daemon("runner") { Runner.run() }
         daemon("installer") { Installer.run() }
         daemon("reload") { watchForUpdate() }

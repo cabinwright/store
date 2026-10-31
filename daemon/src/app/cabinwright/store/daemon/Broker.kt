@@ -29,7 +29,7 @@ object Broker {
      */
     private val SETTINGS = emptySet<String>()
 
-    private class Refused(val code: String, message: String) : Exception(message)
+    class Refused(val code: String, message: String) : Exception(message)
 
     /** Answers one connection. [streaming] runs if it turns into a `kt logcat`, which has no time limit. */
     fun serve(uid: Int, input: InputStream, out: OutputStream, streaming: () -> Unit) {
@@ -95,7 +95,26 @@ object Broker {
             if (op != "exec") unsupported()
             rootExec(c, a)
         }
+        "vehicle" -> {
+            if (op != "state") unsupported()
+            allow(c, cap, op)
+            VehicleOps.state()
+        }
+        "conditioning" -> {
+            allow(c, cap, op)
+            conditioning(op)
+        }
         else -> unsupported()
+    }
+
+    private fun conditioning(op: String): Any? {
+        when (op) {
+            "status" -> Unit
+            "start" -> VehicleOps.start()
+            "stop" -> VehicleOps.stop()
+            else -> unsupported()
+        }
+        return VehicleOps.conditioning()
     }
 
     private fun unsupported(): Nothing = throw Refused(Wire.UNSUPPORTED, "The store's service can't do that.")
