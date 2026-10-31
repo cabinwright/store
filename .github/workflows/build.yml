@@ -20,14 +20,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: cabinwright/menu
-          ref: v1
+          ref: v1.0
           path: menu
 
       # the index repo's signing test vectors, so the store's verifier is tested on the same bytes
       - uses: actions/checkout@v4
         with:
           repository: cabinwright/apps
-          ref: v1
+          ref: main
           path: apps
 
       # before setup-java: the runner's sdkmanager needs its default (newer) Java.
