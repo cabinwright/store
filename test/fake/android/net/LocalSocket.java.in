@@ -1,0 +1,59 @@
+package android.net;
+
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+/** See LocalServerSocket. */
+public class LocalSocket {
+    private Socket s;
+    private int uid;
+
+    public LocalSocket() {
+    }
+
+    LocalSocket(Socket s, int uid) {
+        this.s = s;
+        this.uid = uid;
+    }
+
+    public void connect(LocalSocketAddress address) throws IOException {
+        String port = new String(Files.readAllBytes(Paths.get(System.getProperty("fake.port"))), StandardCharsets.US_ASCII);
+        s = new Socket(InetAddress.getLoopbackAddress(), Integer.parseInt(port.trim()));
+        new DataOutputStream(s.getOutputStream()).writeInt(Integer.parseInt(System.getProperty("fake.uid")));
+    }
+
+    public InputStream getInputStream() throws IOException {
+        return s.getInputStream();
+    }
+
+    public OutputStream getOutputStream() throws IOException {
+        return s.getOutputStream();
+    }
+
+    public java.io.FileDescriptor getFileDescriptor() {
+        return null;
+    }
+
+    public int getSoTimeout() throws IOException {
+        return s.getSoTimeout();
+    }
+
+    public void setSoTimeout(int ms) throws IOException {
+        s.setSoTimeout(ms);
+    }
+
+    public Credentials getPeerCredentials() {
+        return new Credentials(uid);
+    }
+
+    public void close() throws IOException {
+        s.close();
+    }
+}

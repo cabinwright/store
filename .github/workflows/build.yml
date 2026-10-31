@@ -1,0 +1,112 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # the Cabinwright API the store app is built on, pinned to a release
+      - uses: actions/checkout@v4
+        with:
+          repository: cabinwright/menu
+          ref: v1.0
+          path: menu
+
+      # the index repo's signing test vectors, so the store's verifier is tested on the same bytes
+      - uses: actions/checkout@v4
+        with:
+          repository: cabinwright/apps
+          ref: main
+          path: apps
+
+      # before setup-java: the runner's sdkmanager needs its default (newer) Java.
+      # Only build-tools: android.jar (API 19) comes from the menu's fetch-tools.sh with the rest
+      - name: Android SDK parts
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;29.0.2" > /dev/null
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      # Kotlin, R8, android-19.jar, ktlint, detekt, shellcheck: pinned in the menu's fetch-tools.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/cabinwright-tools
+          key: cabinwright-tools-${{ runner.os }}-${{ hashFiles('menu/api/tools/fetch-tools.sh') }}
+
+      - name: Tools
+        run: sh menu/api/tools/fetch-tools.sh
+
+      # with the menu's settings; lint.sh skips nested checkouts (menu/, apps/)
+      - name: Lint
+        run: sh menu/api/tools/lint.sh .
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.CABINWRIGHT_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "CABINWRIGHT_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            # forks and PRs from them: a throwaway debug key
+            mkdir -p ~/.android
+            keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android \
+              -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          fi
+
+      - name: Version
+        run: |
+          VERSION=$(sed -n 's/^version=//p' package/NEMESIS.data)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match package/NEMESIS.data version $VERSION"
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          CABINWRIGHT_KEYSTORE_PASS: ${{ secrets.CABINWRIGHT_KEYSTORE_PASS }}
+        run: |
+          CABINWRIGHT_MENU=$PWD/menu sh build.sh
+          CABINWRIGHT_MENU=$PWD/menu CABINWRIGHT_APPS=$PWD/apps sh test/test.sh
+          CABINWRIGHT_MENU=$PWD/menu CABINWRIGHT_APPS=$PWD/apps sh test/daemon-test.sh
+          mv dist/cabinwright.store.zip "dist/cabinwright.store-v$VERSION.zip"
+          mv dist/cabinwright.store.map "dist/cabinwright.store-v$VERSION.map"
+          mv dist/cabinwright.store.daemon.map "dist/cabinwright.store-v$VERSION.daemon.map"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cabinwright.store-v${{ env.VERSION }}
+          path: |
+            dist/*.zip
+            dist/*.map
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          NEMESIS package \`cabinwright.store\` $VERSION: install \`cabinwright.store-v$VERSION.zip\` with NEMESIS
+          (USB stick, or \`nemesis install --update <zip>\` over ADB).
+          \`cabinwright.store-v$VERSION.map\` (the app) and \`cabinwright.store-v$VERSION.daemon.map\` (the root
+          daemon) are R8's name maps, for reading their stack traces (retrace).
+
+          The App Store shows up in All Menus with the Cabinwright launcher hook installed. It installs
+          packages from the signed [cabinwright/apps](https://github.com/cabinwright/apps) index.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.map --title "Cabinwright store $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

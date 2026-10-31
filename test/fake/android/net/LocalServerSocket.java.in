@@ -1,0 +1,30 @@
+package android.net;
+
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+/** Host test stand-in: TCP on localhost, with each client saying which uid it is playing. */
+public class LocalServerSocket {
+    private final ServerSocket server;
+    private final java.nio.channels.FileLock name;
+
+    public LocalServerSocket(String name) throws IOException {
+        // the name is exclusive, as an abstract socket's is
+        this.name = java.nio.channels.FileChannel.open(Paths.get(System.getProperty("fake.port") + ".name"),
+                java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE).tryLock();
+        if (this.name == null) throw new IOException("Address already in use");
+        server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        Files.write(Paths.get(System.getProperty("fake.port")),
+                Integer.toString(server.getLocalPort()).getBytes(StandardCharsets.US_ASCII));
+    }
+
+    public LocalSocket accept() throws IOException {
+        java.net.Socket s = server.accept();
+        return new LocalSocket(s, new DataInputStream(s.getInputStream()).readInt());
+    }
+}
