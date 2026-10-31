@@ -52,6 +52,7 @@ object KtOps {
         "service" -> service(t, a.drop(1))
         "kill" -> kill(t, a.drop(1))
         "binder" -> binder(t, a.drop(1))
+        "dump" -> dump(t, a.drop(1))
         "root" -> rootCmd(t, a.drop(1))
         "keep" -> keep(t, a.drop(1))
         "ps" -> ps()
@@ -226,6 +227,13 @@ object KtOps {
         }
         val r = root(cmd.toString())
         return Out(if (r.ok) 0 else FAILED, r.out)
+    }
+
+    private fun dump(t: Runner.Tweak, a: List<String>): Out {
+        if (a.size != 1 || !NAME.matches(a[0])) return Out(USAGE, stderr = "usage: kt dump <service>")
+        need(t, Need.DUMP, a[0]) ?: return refuse(t, "reading ${a[0]}'s state")
+        val r = root("dumpsys " + q(a[0]))
+        return Out(r.code, r.out)
     }
 
     private fun rootCmd(t: Runner.Tweak, a: List<String>): Out {
