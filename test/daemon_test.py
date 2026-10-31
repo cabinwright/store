@@ -425,6 +425,9 @@ def kt(*argv):
 
 check(kt("file", "md5", "/data/nemesis/elsewhere")["data"]["code"] == 1, "a read it can't make fails without counting against the tweak")
 check(kt("binder", "com.hkmc.demo", "9")["data"]["code"] == 70, "kt refuses a code the tweak didn't declare")
+check(kt("listen", "com.hkmc.demo", "4", "3", "3", "a.Listener", "1")["data"]["code"] == 70, "kt listen needs every code declared")
+check(kt("listen", "com.hkmc.demo", "x")["data"]["code"] == 64, "kt listen checks its arguments")
+check(kt("listen", "com.hkmc.demo", "3", "3", "3", "a.Listener", "1")["data"]["code"] == 1, "a service that isn't there is a failure, not a value")
 check(kt("dump", "com.hkmc.demo")["data"]["stdout"] == "dumped com.hkmc.demo\n", "kt dump reads a declared service")
 check(kt("dump", "com.hkmc.other")["data"]["code"] == 70, "kt dump refuses a service the tweak didn't declare")
 check(kt("file", "replace", str(TARGET), str(W / "payload"), "6755")["data"]["code"] == 64, "kt won't make a setuid file")

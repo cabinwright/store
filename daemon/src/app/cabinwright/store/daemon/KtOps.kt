@@ -52,6 +52,7 @@ object KtOps {
         "service" -> service(t, a.drop(1))
         "kill" -> kill(t, a.drop(1))
         "binder" -> binder(t, a.drop(1))
+        "listen" -> listen(t, a.drop(1))
         "dump" -> dump(t, a.drop(1))
         "root" -> rootCmd(t, a.drop(1))
         "keep" -> keep(t, a.drop(1))
@@ -227,6 +228,21 @@ object KtOps {
         }
         val r = root(cmd.toString())
         return Out(if (r.ok) 0 else FAILED, r.out)
+    }
+
+    @Suppress("MagicNumber", "ReturnCount")
+    private fun listen(t: Runner.Tweak, a: List<String>): Out {
+        val codes = listOf(a.getOrNull(1), a.getOrNull(2), a.getOrNull(3), a.getOrNull(5)).map { it?.toIntOrNull() }
+        val names = a.size == 6 && NAME.matches(a[0]) && NAME.matches(a[4])
+        if (!names || codes.any { it == null }) {
+            return Out(USAGE, stderr = "usage: kt listen <service> <add> <remove> <request> <listener> <callback>")
+        }
+        for (code in a.subList(1, 4)) {
+            need(t, Need.BINDER, a[0], code) ?: return refuse(t, "calling ${a[0]} code $code")
+        }
+        val words = BinderListen.ask(a[0], codes[0]!!, codes[1]!!, codes[2]!!, a[4], codes[3]!!)
+            ?: return Out(FAILED, stderr = "kt: no answer from ${a[0]}")
+        return Out(0, words.joinToString(" ") + "\n")
     }
 
     private fun dump(t: Runner.Tweak, a: List<String>): Out {

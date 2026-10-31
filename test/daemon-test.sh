@@ -34,7 +34,7 @@ for f in "$HERE"/fake/android/net/*.java.in; do
 done
 "$JDK/bin/javac" -nowarn -d "$OUT/classes" "$OUT"/fake/*.java
 find "$ROOT/daemon/src" "$ROOT/common/src" "$OUT/gen" -name '*.kt' >"$OUT/sources.txt"
-JAVA_HOME=$JDK "$FT/kotlinc/bin/kotlinc" -jvm-target 1.8 -no-reflect -nowarn -cp "$OUT/classes" \
+JAVA_HOME=$JDK "$FT/kotlinc/bin/kotlinc" -jvm-target 1.8 -no-reflect -nowarn -cp "$OUT/classes:$FT/android-19.jar" \
     -d "$OUT/classes" "@$OUT/sources.txt" 2>/dev/null
-python3 -I "$HERE/daemon_test.py" "$OUT" "$JDK/bin/java" "$OUT/classes:$FT/kotlinc/lib/kotlin-stdlib.jar" \
+python3 -I "$HERE/daemon_test.py" "$OUT" "$JDK/bin/java" "$OUT/classes:$FT/kotlinc/lib/kotlin-stdlib.jar:$FT/android-19.jar" \
     "$BT" "$FT/android-19.jar" "$APPS/tests/vectors/test-key.pem"
