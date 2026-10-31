@@ -22,7 +22,9 @@ import java.util.TimeZone
 
 private const val BUFFER = 65536
 
-const val NEMESIS = "/system/xbin/nemesis"
+val NEMESIS = Paths.ROOT + "/system/xbin/nemesis"
+
+private val SH = if (Paths.ROOT.isEmpty()) "/system/bin/sh" else "/bin/sh"
 
 /** Reads a whole file, refusing more than [max] bytes. */
 fun readFile(f: File, max: Int): ByteArray {
@@ -80,15 +82,21 @@ private fun digest(f: File, algorithm: String): String {
     return IndexCheck.hex(md.digest())
 }
 
-/** Everything a stream has left (at most [max] bytes kept), closing it. */
-fun drain(input: InputStream, max: Int = Int.MAX_VALUE): ByteArray {
+/** A stream up to [max] bytes, closing it. Past that, [full] runs and reading stops. */
+@Suppress("LoopWithTooManyJumpStatements")
+fun drain(input: InputStream, max: Int = Int.MAX_VALUE, full: () -> Unit = {}): ByteArray {
     val b = ByteArrayOutputStream()
     try {
         val buf = ByteArray(BUFFER)
         while (true) {
             val r = input.read(buf)
             if (r <= 0) break
-            if (b.size() < max) b.write(buf, 0, minOf(r, max - b.size()))
+            if (r > max - b.size()) {
+                b.write(buf, 0, max - b.size())
+                full()
+                break
+            }
+            b.write(buf, 0, r)
         }
     } finally {
         input.close()
@@ -111,7 +119,8 @@ fun exec(argv: List<String>, input: ByteArray? = null, max: Int = 1 shl 20): Ran
     } finally {
         stdin.close()
     }
-    val out = drain(p.inputStream, max)
+    // a command that never ends (cat /dev/zero) mustn't hold this thread
+    val out = drain(p.inputStream, max) { p.destroy() }
     val code = try {
         p.waitFor()
     } catch (ignored: InterruptedException) {
@@ -122,13 +131,38 @@ fun exec(argv: List<String>, input: ByteArray? = null, max: Int = 1 shl 20): Ran
 }
 
 /** A shell command as this process. */
-fun sh(command: String, input: ByteArray? = null): Ran = exec(listOf("/system/bin/sh", "-c", command), input)
+fun sh(command: String, input: ByteArray? = null): Ran = exec(listOf(SH, "-c", command), input)
 
 /** A shell command as root through NEMESIS; [max] bytes of output kept. */
 fun root(command: String, input: ByteArray? = null, max: Int = 1 shl 20): Ran =
     exec(listOf(NEMESIS, "root", "-c", command), input, max)
 
-/** A shell command as [uid] (and gid), with no supplementary groups. */
+/** Like [root], stopped after [timeoutMs]. */
+fun rootTimed(command: String, timeoutMs: Long): Ran {
+    val p = ProcessBuilder(NEMESIS, "root", "-c", command).redirectErrorStream(true).start()
+    p.outputStream.close()
+    val killer = Thread {
+        try {
+            Thread.sleep(timeoutMs)
+            p.destroy()
+        } catch (ignored: InterruptedException) {
+            // it finished first
+        }
+    }
+    killer.isDaemon = true
+    killer.start()
+    val out = drain(p.inputStream, 1 shl 20) { p.destroy() }
+    val code = try {
+        p.waitFor()
+    } catch (ignored: InterruptedException) {
+        Thread.currentThread().interrupt()
+        -1
+    }
+    killer.interrupt()
+    return Ran(code, out)
+}
+
+/** A shell command as [uid] (and gid). NEMESIS doesn't clear supplementary groups: see design.md "Running". */
 fun asUid(uid: Int, command: String, input: ByteArray? = null, max: Int = 1 shl 20): Ran =
     exec(listOf(NEMESIS, "root", uid.toString(), "-c", command), input, max)
 

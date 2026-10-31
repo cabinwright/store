@@ -1,0 +1,7 @@
+package android.net;
+
+/** See LocalServerSocket. */
+public class LocalSocketAddress {
+    public LocalSocketAddress(String name) {
+    }
+}

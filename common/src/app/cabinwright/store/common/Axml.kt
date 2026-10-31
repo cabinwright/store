@@ -22,6 +22,7 @@ class Axml(private val d: ByteArray) {
         require(pkg.isNotEmpty()) { "AndroidManifest.xml has no package name" }
     }
 
+    @Suppress("ComplexCondition", "CyclomaticComplexMethod", "NestedBlockDepth")
     private fun parse() {
         var pos = u16(2)
         val stack = ArrayList<String>()
@@ -53,8 +54,14 @@ class Axml(private val d: ByteArray) {
                 }
                 END -> {
                     val tag = if (stack.isEmpty()) "" else stack.removeAt(stack.size - 1)
-                    if (tag == "intent-filter" && main && launcherCategory && launcher.isEmpty() && activity.isNotEmpty()) {
-                        launcher = "$pkg/" + if (activity.startsWith(".") || activity.contains('.')) activity else ".$activity"
+                    if (tag == "intent-filter" &&
+                        main &&
+                        launcherCategory &&
+                        launcher.isEmpty() &&
+                        activity.isNotEmpty()
+                    ) {
+                        launcher =
+                            "$pkg/" + if (activity.startsWith(".") || activity.contains('.')) activity else ".$activity"
                     }
                     if (tag == "intent-filter") {
                         main = false
@@ -66,7 +73,8 @@ class Axml(private val d: ByteArray) {
         }
     }
 
-    /** An element's attributes by name; android:name is keyed [NAME] (by resource id, as obfuscated manifests blank names). */
+    /** An element's attributes by name; android:name is keyed [NAME] (by resource id: some blank the name). */
+    @Suppress("LoopWithTooManyJumpStatements")
     private fun attributes(at: Int): Map<String, String> {
         val out = HashMap<String, String>()
         val start = u16(at + 8)
@@ -85,7 +93,11 @@ class Axml(private val d: ByteArray) {
                 dataType == TYPE_STRING -> str(data)
                 else -> continue
             }
-            if (rid == ATTR_NAME) out[NAME] = value else if (rid == 0) out[str(nameIdx)] = value
+            if (rid == ATTR_NAME) {
+                out[NAME] = value
+            } else if (rid == 0) {
+                out[str(nameIdx)] = value
+            }
         }
         return out
     }

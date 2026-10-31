@@ -67,13 +67,35 @@ object Prompts {
 }
 
 /**
- * Whether the car is parked. The gear is read from the head unit's vehicle service with the
- * probe in vehicle.json (root-only): `{"probe": "<service call ...>", "parked": "<text the
- * reply contains in P>"}`. Without a working probe the car counts as not parked; test builds
- * may set `"assume_parked": true`.
+ * Whether the car is parked. The gear comes from the head unit's own `getGearPStatus`, whose
+ * code is looked up by name in this car's framework because codes differ between builds. An
+ * override in vehicle.json (root-only) replaces that: `{"probe": "<service call ...>", "parked":
+ * "<text the reply contains in P>"}`. If the gear can't be read the car counts as not parked;
+ * test builds may set `"assume_parked": true`.
  */
 object Vehicle {
+    private const val SERVICE = "com.hkmc.micom.system"
+    private const val GEAR_P = "getGearPStatus"
+    private const val IN_PARK = "Parcel(00000000 00000001"
+
+    private fun framework(): Boolean {
+        val code = try {
+            val binder = Class.forName("android.os.ServiceManager")
+                .getMethod("getService", String::class.java).invoke(null, SERVICE) ?: return false
+            val descriptor = Class.forName("android.os.IBinder").getMethod("getInterfaceDescriptor").invoke(binder)
+            val field = Class.forName("$descriptor\$Stub").getDeclaredField("TRANSACTION_$GEAR_P")
+            field.isAccessible = true
+            field.getInt(null)
+        } catch (ignored: ReflectiveOperationException) {
+            return false
+        }
+        val r = root("service call $SERVICE $code")
+        return r.ok && r.out.contains(IN_PARK)
+    }
+
+    @Suppress("ReturnCount")
     fun parked(): Boolean {
+        if (!Paths.VEHICLE.isFile) return framework()
         val cfg = try {
             Json.parseObject(readText(Paths.VEHICLE, 64 shl 10))
         } catch (ignored: IOException) {

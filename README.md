@@ -8,34 +8,34 @@ index, on the car. Written for the 2023 Kia EV6 (Gen5W, firmware
 | Part | What it is |
 |---|---|
 | `app/` | The store app (`app.cabinwright.store`): the head unit's look via the Cabinwright API's `CarPage`, day and night. |
-| `helper/` | The root helper service. It does every install and removal, and checks everything again itself. |
+| `daemon/` | `cabinwrightd`, the one root process: installer, broker and tweak runner, and `kt`, the command tweaks use. See [docs/design.md](docs/design.md). |
 | `common/` | Shared by both: index signature check (RSA-3072, SHA256withRSA, pinned keys), sequence and expiry checks, JSON, versions. |
 | `keys/` | The pinned index public keys (`cabinwright-2026a`, backup `cabinwright-2026b`). |
-| `test/` | Host tests (`test/test.sh`), including the index repo's signature test vectors. |
+| `test/` | Host tests: `test/test.sh` (`common/`, with the index repo's signature test vectors) and `test/daemon-test.sh` (the daemon against a mock head unit). |
 
 ## How it stays safe
 
-- Nothing privileged happens without the driver's knowledge. The helper takes requests only
-  from the store app's read-only provider (`content://app.cabinwright.store.requests/pending`), which
-  answers only root, system and adb, and the app lists only what the driver just confirmed.
-  Other apps can't see or add requests; request files on the sdcard (App Store 1.0's way) are
-  ignored and deleted. Each request runs once (by its uuid), and the app drops it once it sees
-  the result, gives up, or restarts.
-- Nothing else on the sdcard is trusted for anything privileged: downloads and the index copy
-  are checked again by the helper, and results and status only go to the screen.
+- Nothing privileged happens without the driver's knowledge. Only the store app, known by its
+  uid and certificate, can ask `cabinwrightd` to install or remove, and it asks only for what the
+  driver just confirmed.
+- Nothing on the sdcard is trusted for anything privileged: the index and downloads are copied to
+  private storage and checked there.
 - The index is only trusted if it is signed by a pinned key, newer than the last one seen, and
-  not expired. The helper keeps its own record, so a rolled-back or replayed index is refused
+  not expired. The daemon keeps its own record, so a rolled-back or replayed index is refused
   even after the app's data is wiped.
-- Each download must match the index's size and SHA-256, its `NEMESIS.data` must match the
-  entry, and `execute` packages (which run at install) are never installed.
-- Before installing, the app shows in plain words what a package does (apps, root services,
-  `/system` changes), taken from the review in the index.
+- Each download must match the index's size and SHA-256. `app` and `tweaks` packages never reach
+  NEMESIS with their own manifest, so their hooks and services never run; `execute` packages are
+  never installed.
+- A tweak's needs must be exactly what the store reviewed, and an app can use only the
+  capabilities its entry declares and the driver left on.
+- Before installing, the app shows in plain words what a package does, from the review in the index.
 - Retired apps (`deprecated` or `withdrawn` in the index) are never installed or updated, only
-  removed. Removal doesn't need the index at all: the helper removes what its own record
-  (`/data/nemesis/cabinwright/store/state.json`) says it installed, and nothing else, never itself.
-  Helpers before 1.1 kept no record; the first 1.1 helper seeds it once from the verified,
-  unexpired index (installed packages it lists) and logs what it added.
+  removed. Removal doesn't need the index at all: the daemon removes what its own record
+  (`/data/nemesis/cabinwright/state.json`) says it installed, and nothing else, never itself.
 - With an expired index, nothing is installed or updated; removing still works.
+
+**Lockdown isn't possible yet.** Any app can still reach root through NEMESIS without the broker:
+see "Lockdown" in the design.
 
 ## Build
 
@@ -56,10 +56,9 @@ so a newer call is a build error:
 
 - `app/` is built by the menu's `build-app.sh` with `common/` and the generated `Keys.kt`,
   shrunk by R8 (`dist/cabinwright.store.map`).
-- `helper/` is a plain dex for `dalvikvm` (no framework classes), with `common/` and Kotlin's
-  stdlib shrunk into it by R8; `helper/proguard-rules.pro` keeps `Helper.main`, which
-  `svc/helper.sh` starts by name (`dist/cabinwright.store.helper.map`). It starts on every boot
-  and update on a slow head unit, so it stays small: no reflection, no Kotlin function
-  references (`::f`), and `parts()` (common/Text.kt) rather than Kotlin's general `split`.
-- `test/` runs `common/` and the helper's import of kia.store's record on the host JVM, against
-  the index repo's signing test vectors.
+- `daemon/` is a dex for `app_process`, with `common/` and Kotlin's stdlib shrunk into it by R8;
+  `daemon/proguard-rules.pro` keeps the two mains, which `svc/cabinwrightd.sh` and `kt` start by
+  name (`dist/cabinwright.store.daemon.map`).
+- `test/test.sh` runs `common/` on the host JVM against the index repo's signing test vectors.
+- `test/daemon-test.sh` runs the real daemon on the host JVM, with stand-ins for `android.net`'s
+  sockets and for `nemesis`, and real packages, APK signatures and index signatures.

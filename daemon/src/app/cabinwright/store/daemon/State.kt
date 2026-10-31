@@ -75,7 +75,9 @@ object State {
 
 /** Where everything lives. */
 object Paths {
-    const val BASE = "/data/nemesis/cabinwright"
+    /** Empty on the car; a scratch folder in the host test (test/daemon-test.sh). */
+    val ROOT: String = System.getProperty("cabinwright.test.root").orEmpty()
+    val BASE = "$ROOT/data/nemesis/cabinwright"
     val STATE = File(BASE, "state.json")
     val JOURNAL = File(BASE, "journal")
     val BACKUP = File(BASE, "backup")
@@ -90,10 +92,10 @@ object Paths {
     val VEHICLE = File(BASE, "vehicle.json")
     val DEBUG_INDEX = File(BASE, "debug-index")
 
-    const val SD = "/sdcard/cabinwright/store"
-    const val DOWNLOADS = "$SD/downloads"
+    val SD = "$ROOT/sdcard/cabinwright/store"
+    val DOWNLOADS = "$SD/downloads"
     const val SELF = "cabinwright.store"
     const val STORE_APP = "app.cabinwright.store"
-    val SELF_DIR = File("/data/nemesis/apps/$SELF")
+    val SELF_DIR = File("$ROOT/data/nemesis/apps/$SELF")
     val JAR = File(SELF_DIR, "svc/cabinwrightd.jar")
 }

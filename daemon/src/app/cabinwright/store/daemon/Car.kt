@@ -91,5 +91,5 @@ object Car {
         return out
     }
 
-    const val APPS = "/data/nemesis/apps"
+    val APPS = Paths.ROOT + "/data/nemesis/apps"
 }

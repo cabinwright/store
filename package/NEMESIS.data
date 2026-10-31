@@ -1,5 +1,5 @@
 [nemesis]
-version=1.2.1
+version=1.0
 id=cabinwright.store
 name=Cabinwright
 types=application,service
@@ -11,8 +11,8 @@ package=app.cabinwright.store
 component=app.cabinwright.store/.StoreActivity
 
 [service.0]
-name=helper
+name=cabinwrightd
 kind=sh
-path=svc/helper.sh
+path=svc/cabinwrightd.sh
 uid=root
 mode=restart

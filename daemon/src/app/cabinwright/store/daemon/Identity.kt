@@ -25,8 +25,8 @@ sealed class Caller {
 }
 
 object Identity {
-    private val LIST = File("/data/system/packages.list")
-    private val XML = File("/data/system/packages.xml")
+    private val LIST = File(Paths.ROOT + "/data/system/packages.list")
+    private val XML = File(Paths.ROOT + "/data/system/packages.xml")
     private const val MAX_LIST = 4 shl 20
     private const val MAX_XML = 32 shl 20
     private var listStamp = -1L
@@ -35,6 +35,7 @@ object Identity {
     private var xml = ""
     private var storeCert: Pair<Long, String>? = null
 
+    @Suppress("ReturnCount")
     fun of(uid: Int): Caller {
         Runner.forUid(uid)?.let { return Caller.Tweak(it, uid) }
         val pkg = synchronized(this) {
@@ -95,7 +96,8 @@ object Certs {
         try {
             val sig = z.entries().toList().firstOrNull {
                 val n = it.name
-                n.startsWith("META-INF/") && n.count { c -> c == '/' } == 1 &&
+                n.startsWith("META-INF/") &&
+                    n.count { c -> c == '/' } == 1 &&
                     (n.endsWith(".RSA") || n.endsWith(".DSA") || n.endsWith(".EC"))
             } ?: throw IOException("$apk isn't signed")
             return of(z.getInputStream(sig))
@@ -109,7 +111,7 @@ object Certs {
         val first = certs.firstOrNull() ?: throw IOException("no certificate")
         IndexCheck.hex(first.encoded)
     } catch (e: CertificateException) {
-        throw IOException("bad signature block: " + e.message)
+        throw IOException("bad signature block: " + e.message, e)
     } finally {
         pkcs7.close()
     }

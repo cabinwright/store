@@ -26,7 +26,7 @@ import java.util.regex.Pattern
  * passed here is built by the helper from fixed directories and checked names.
  */
 internal object Sdcard {
-    const val NEMESIS = "/system/xbin/nemesis"
+    private val NEMESIS: String get() = app.cabinwright.store.daemon.NEMESIS
     private const val BUFFER = 65536
     private const val MAX_LISTING = 1 shl 20
 

@@ -60,6 +60,7 @@ object KtOps {
 
     // ------------------------------------------------------------------ file
 
+    @Suppress("CyclomaticComplexMethod", "ReturnCount")
     private fun file(t: Runner.Tweak, uid: Int, a: List<String>): Out {
         if (a.isEmpty()) return Out(USAGE, stderr = "usage: kt file replace|adopt|original|md5 ...")
         val args = a.drop(1)
@@ -73,10 +74,17 @@ object KtOps {
             "replace" -> {
                 val under = args.firstOrNull() == "--under"
                 val rest = if (under) args.drop(1) else args
-                if (rest.size !in 2..3) return Out(USAGE, stderr = "usage: kt file replace [--under] <path> <new> [<mode>]")
+                if (rest.size !in
+                    2..3
+                ) {
+                    return Out(USAGE, stderr = "usage: kt file replace [--under] <path> <new> [<mode>]")
+                }
                 val path = rest[0]
                 val n = need(t, Need.FILE, path) ?: return refuse(t, "changing $path")
-                val mode = rest.getOrNull(2)?.let { it.toIntOrNull(8) ?: return Out(USAGE, stderr = "kt: bad mode $it") }
+                // never setuid or setgid: root would own the file and the tweak chose its bytes
+                val mode = rest.getOrNull(2)?.let { m ->
+                    m.toIntOrNull(8)?.takeIf { it in 0..0x1ff } ?: return Out(USAGE, stderr = "kt: bad mode $m")
+                }
                 val data = readAs(uid, rest[1])
                 Journal.replace(t.id, path, data, mode, allowedOf(n), under)
                 Out(0)
@@ -119,14 +127,21 @@ object KtOps {
     /** md5 reads: system files, NEMESIS packages' backups, and the tweak's own declared paths. */
     private fun readablePath(t: Runner.Tweak, path: String): Boolean {
         if (path.contains("..")) return false
-        return path.startsWith("/system/") || path.startsWith("/vendor/") || path.startsWith("/data/nemesis/backup/") ||
+        return path.startsWith("/system/") ||
+            path.startsWith("/vendor/") ||
+            path.startsWith("/data/nemesis/backup/") ||
             need(t, Need.FILE, path) != null
     }
 
     // ------------------------------------------------------------------ prop, setting
 
+    @Suppress("ReturnCount")
     private fun prop(t: Runner.Tweak, a: List<String>): Out {
-        if (a.size < 2 || !NAME.matches(a[1])) return Out(USAGE, stderr = "usage: kt prop get|set|adopt <name> [<value>]")
+        if (a.size < 2 ||
+            !NAME.matches(a[1])
+        ) {
+            return Out(USAGE, stderr = "usage: kt prop get|set|adopt <name> [<value>]")
+        }
         val name = a[1]
         return when (a[0]) {
             "get" -> Out(0, sh("getprop " + q(name)).out)
@@ -222,6 +237,7 @@ object KtOps {
 
     private fun keep(t: Runner.Tweak, a: List<String>): Out {
         if (a.size != 1) return Out(USAGE, stderr = "usage: kt keep <need>")
+        if (!Runner.disabling(t.id)) return Out(USAGE, stderr = "kt: keep only works from disable.sh")
         val n = try {
             Need.parse(a[0] + " | keep")
         } catch (e: IllegalArgumentException) {
@@ -232,6 +248,7 @@ object KtOps {
         return Out(0)
     }
 
+    @Suppress("LoopWithTooManyJumpStatements")
     private fun ps(): Out {
         val b = StringBuilder()
         for (p in Car.pids()) {

@@ -56,7 +56,7 @@ object Journal {
     private fun files(): MutableMap<String, Any?> = try {
         if (Paths.FILES.isFile) Json.parseObject(readText(Paths.FILES, MAX)) else Json.of()
     } catch (e: IllegalArgumentException) {
-        throw IOException("files.json unreadable: " + e.message)
+        throw IOException("files.json unreadable: " + e.message, e)
     }
 
     private fun saveFiles(all: Map<String, Any?>) {
@@ -80,7 +80,13 @@ object Journal {
     fun current(path: String): MutableMap<String, Any?> {
         val m = meta(path) ?: return Json.of("kind" to "absent")
         if (m.type == 'l') return Json.of("kind" to "link", "link" to m.link)
-        return Json.of("kind" to "file", "md5" to md5Of(path), "mode" to m.mode.toLong(), "uid" to m.uid.toLong(), "gid" to m.gid.toLong())
+        return Json.of(
+            "kind" to "file",
+            "md5" to md5Of(path),
+            "mode" to m.mode.toLong(),
+            "uid" to m.uid.toLong(),
+            "gid" to m.gid.toLong(),
+        )
     }
 
     /** The version string a need lists for [state]: md5, `absent` or `link:<target>`. */
@@ -123,6 +129,7 @@ object Journal {
      * Replaces [path] for [tweak] with [data]. [allowed] are the need's versions, checked
      * against the original. [under]: below the other tweaks' changes.
      */
+    @Suppress("CyclomaticComplexMethod", "LongParameterList")
     fun replace(tweak: String, path: String, data: ByteArray, mode: Int?, allowed: List<String>, under: Boolean) =
         synchronized(lock) {
             val all = files()
@@ -146,7 +153,13 @@ object Journal {
                     val old = l[0]
                     val oldTweak = Json.str(old, "tweak")
                     move(backupOf(oldTweak, path), backupOf(tweak, path))
-                    val newBeneath = Json.of("kind" to "file", "md5" to wrote, "mode" to (mode ?: modeOf(original)).toLong(), "uid" to 0L, "gid" to 0L)
+                    val newBeneath = Json.of(
+                        "kind" to "file",
+                        "md5" to wrote,
+                        "mode" to (mode ?: modeOf(original)).toLong(),
+                        "uid" to 0L,
+                        "gid" to 0L,
+                    )
                     keep(backupOf(oldTweak, path), data)
                     l.add(0, Json.of("tweak" to tweak, "wrote" to wrote, "beneath" to original))
                     old["beneath"] = newBeneath
@@ -155,8 +168,19 @@ object Journal {
                     if (l.isNotEmpty()) checkTop(path, l[l.size - 1])
                     val now = current(path)
                     if (Json.str(now, "kind") == "file") keep(backupOf(tweak, path), bytesOf(path))
-                    write(path, data, mode ?: modeOf(now))
+                    // recorded before it happens: a crash in between leaves a record to undo
                     l.add(Json.of("tweak" to tweak, "wrote" to wrote, "beneath" to now))
+                    setLayers(all, path, l)
+                    saveFiles(all)
+                    if (!has(tweak, "file", "path", path)) add(tweak, Json.of("t" to "file", "path" to path))
+                    try {
+                        write(path, data, mode ?: modeOf(now), ownerOf(now))
+                    } catch (e: IOException) {
+                        forgetLayer(tweak, path)
+                        save(tweak, entries(tweak).filter { Json.str(it, "path") != path })
+                        throw e
+                    }
+                    return@synchronized
                 }
             }
             setLayers(all, path, l)
@@ -174,9 +198,19 @@ object Journal {
             Json.of("kind" to "absent")
         } else {
             val now = meta(path)
-            Json.of("kind" to "file", "md5" to md5(original), "mode" to (now?.mode ?: DEFAULT_MODE).toLong(), "uid" to 0L, "gid" to 0L)
+            Json.of(
+                "kind" to "file",
+                "md5" to md5(original),
+                "mode" to (now?.mode ?: DEFAULT_MODE).toLong(),
+                "uid" to 0L,
+                "gid" to 0L,
+            )
         }
-        if (ANY !in allowed && version(beneath) !in allowed) throw Refused("that original of $path isn't a version this tweak was made for")
+        if (ANY !in allowed &&
+            version(beneath) !in allowed
+        ) {
+            throw Refused("that original of $path isn't a version this tweak was made for")
+        }
         if (original != null) keep(backupOf(tweak, path), original)
         val now = current(path)
         l.add(Json.of("tweak" to tweak, "wrote" to version(now), "beneath" to beneath))
@@ -195,11 +229,11 @@ object Journal {
         val beneath = Json.obj(layer, "beneath")
         var problem = ""
         if (i == l.size - 1) {
-            val now = current(path)
-            if (version(now) != Json.str(layer, "wrote")) {
-                problem = "$path was changed by something else, so it was left as it is"
-            } else {
-                restore(path, beneath, backupOf(tweak, path))
+            val now = version(current(path))
+            when (now) {
+                Json.str(layer, "wrote") -> restore(path, beneath, backupOf(tweak, path))
+                version(beneath) -> Unit // recorded, but cut off before the write
+                else -> problem = "$path was changed by something else, so it was left as it is"
             }
         } else {
             val above = l[i + 1]
@@ -214,6 +248,7 @@ object Journal {
     }
 
     /** Paths [tweak] changed that no longer hold what it wrote (and nothing on top explains it). */
+    @Suppress("LoopWithTooManyJumpStatements")
     fun changedElsewhere(tweak: String): List<String> = synchronized(lock) {
         val all = files()
         val out = ArrayList<String>()
@@ -232,7 +267,8 @@ object Journal {
         if (now != Json.str(top, "wrote")) throw Refused("$path was changed by something else")
     }
 
-    private fun write(path: String, data: ByteArray, mode: Int) {
+    @Suppress("ThrowsCount")
+    private fun write(path: String, data: ByteArray, mode: Int, owner: String = "") {
         val tmp = "$path.cabinwright-new"
         val dir = path.substringBeforeLast('/')
         val system = path.startsWith("/system/")
@@ -240,21 +276,29 @@ object Journal {
             if (system && !root("$NEMESIS remount rw").ok) throw IOException("can't remount /system")
             if (!root("mkdir -p " + q(dir) + " && cat > " + q(tmp), data).ok) throw IOException("can't write $tmp")
             if (!root("chmod " + octal(mode) + " " + q(tmp)).ok) throw IOException("can't set the mode of $tmp")
+            if (owner.isNotEmpty() &&
+                !root("chown $owner " + q(tmp)).ok
+            ) {
+                throw IOException("can't set the owner of $tmp")
+            }
             if (md5Of(tmp) != md5(data)) throw IOException("$tmp didn't verify")
-            if (!root("rm -f " + q(path) + " && mv " + q(tmp) + " " + q(path)).ok) throw IOException("can't replace $path")
+            // a rename: a cut here leaves the old file or the new one, never none
+            if (!root("mv " + q(tmp) + " " + q(path)).ok) throw IOException("can't replace $path")
         } finally {
             root("rm -f " + q(tmp))
             if (system) root("$NEMESIS remount ro")
         }
     }
 
+    @Suppress("ThrowsCount")
     private fun restore(path: String, beneath: Map<String, Any?>, backup: File) {
         when (Json.str(beneath, "kind")) {
             "absent" -> {
                 val system = path.startsWith("/system/")
                 if (system) root("$NEMESIS remount rw")
-                root("rm -f " + q(path))
+                val ok = root("rm -f " + q(path)).ok
                 if (system) root("$NEMESIS remount ro")
+                if (!ok) throw IOException("can't remove $path")
             }
             "link" -> {
                 val system = path.startsWith("/system/")
@@ -265,18 +309,21 @@ object Journal {
             }
             else -> {
                 val data = readFile(backup, MAX_FILE)
-                if (md5(data) != Json.str(beneath, "md5")) throw IOException("the backup of $path doesn't match its record")
-                write(path, data, modeOf(beneath))
-                val uid = Json.num(beneath, "uid", 0)
-                val gid = Json.num(beneath, "gid", 0)
-                if (uid != 0L || gid != 0L) {
-                    val system = path.startsWith("/system/")
-                    if (system) root("$NEMESIS remount rw")
-                    root("chown $uid:$gid " + q(path))
-                    if (system) root("$NEMESIS remount ro")
+                if (md5(data) !=
+                    Json.str(beneath, "md5")
+                ) {
+                    throw IOException("the backup of $path doesn't match its record")
                 }
+                write(path, data, modeOf(beneath), ownerOf(beneath))
             }
         }
+    }
+
+    /** "uid:gid" for a file that isn't root's; root's needs no chown, which the daemon may not be able to do. */
+    private fun ownerOf(state: Map<String, Any?>): String {
+        val uid = Json.num(state, "uid", 0)
+        val gid = Json.num(state, "gid", 0)
+        return if (uid == 0L && gid == 0L) "" else "$uid:$gid"
     }
 
     private fun modeOf(state: Map<String, Any?>): Int = Json.num(state, "mode", DEFAULT_MODE.toLong()).toInt()
@@ -295,7 +342,15 @@ object Journal {
     // ------------------------------------------------------------------ properties and settings
 
     fun setProp(tweak: String, name: String, value: String) = synchronized(lock) {
-        if (!has(tweak, "prop", "name", name)) add(tweak, Json.of("t" to "prop", "name" to name, "prev" to propNow(name)))
+        if (!has(
+                tweak,
+                "prop",
+                "name",
+                name,
+            )
+        ) {
+            add(tweak, Json.of("t" to "prop", "name" to name, "prev" to propNow(name)))
+        }
         if (!root("setprop " + q(name) + " " + q(value)).ok) throw IOException("setprop $name failed")
     }
 
@@ -312,14 +367,24 @@ object Journal {
     }
 
     private fun restoreProp(name: String, prev: String?) {
-        if (prev == null && name.startsWith("persist.")) root("rm -f " + q("/data/property/$name"))
         root("setprop " + q(name) + " " + q(prev ?: ""))
+        // after: setprop writes the persist file, and an unset property has none
+        if (prev == null && name.startsWith("persist.")) root("rm -f " + q("/data/property/$name"))
     }
 
     fun putSetting(tweak: String, table: String, name: String, value: String) = synchronized(lock) {
         val key = "$table/$name"
         if (!has(tweak, "setting", "key", key)) {
-            add(tweak, Json.of("t" to "setting", "key" to key, "table" to table, "name" to name, "prev" to settingNow(table, name)))
+            add(
+                tweak,
+                Json.of(
+                    "t" to "setting",
+                    "key" to key,
+                    "table" to table,
+                    "name" to name,
+                    "prev" to settingNow(table, name),
+                ),
+            )
         }
         if (!root("settings put $table " + q(name) + " " + q(value)).ok) throw IOException("settings put $key failed")
     }

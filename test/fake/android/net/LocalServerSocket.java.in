@@ -1,0 +1,25 @@
+package android.net;
+
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+/** Host test stand-in: TCP on localhost, with each client saying which uid it is playing. */
+public class LocalServerSocket {
+    private final ServerSocket server;
+
+    public LocalServerSocket(String name) throws IOException {
+        server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        Files.write(Paths.get(System.getProperty("fake.port")),
+                Integer.toString(server.getLocalPort()).getBytes(StandardCharsets.US_ASCII));
+    }
+
+    public LocalSocket accept() throws IOException {
+        java.net.Socket s = server.accept();
+        return new LocalSocket(s, new DataInputStream(s.getInputStream()).readInt());
+    }
+}

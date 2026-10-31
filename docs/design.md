@@ -127,7 +127,7 @@ Details of the `kt` commands:
 - Restoring a property that was unset deletes `/data/property/<name>` rather than setting it
   to an empty value.
 
-`kt keep <need>` (only from `disable.sh`) drops the journal entries for one of the tweak's own
+`kt keep <need>` (refused anywhere but `disable.sh`) drops the journal entries for one of the tweak's own
 needs, so turning the tweak off leaves that value as it is instead of restoring it. auto-dst
 uses it: the clock's daylight-saving setting should match the clock, not go back to what it
 was when the tweak was turned on.
@@ -154,13 +154,19 @@ prints `service call`'s own output (`Result: Parcel(…)`).
   runner reports from the journal.
 - **service:** on → `run.sh` runs while the switch is on; off → it is stopped, `disable.sh`
   runs if present, then its journal is replayed.
-- Scripts run as the tweak's own uid, allocated by the runner from 99000–99999 (unused on
-  Android 4.4; no package, no permissions, no supplementary groups), in the tweak's folder, with
+- Scripts run as the tweak's own uid, allocated by the runner from 90000–98999 (unused on
+  Android 4.4, unlike 99000 and up, Android's isolated processes, which any app can start; no
+  package, no permissions), in the tweak's folder, with
   `$TWEAK_ID`, `$TWEAK_DIR`, `$TWEAK_DATA` (a private directory owned by that uid) and `kt` on
   `$PATH`. That uid can run `sh`, toolbox, `getprop`, `app_process` and `dexopt`, read its
   folder and its package's `lib/`, and write `$TWEAK_DATA`,
   and nothing else: settings, `am`, `service call`, logcat, the sdcard and the network all go
   through `kt`. The uid is also how the runner knows which tweak a `kt` call comes from.
+- A tweak uid has no supplementary groups when the daemon was started at boot. NEMESIS never
+  clears them, so a daemon started from ADB (`nemesis service start`) passes the shell's groups on
+  to tweaks until the next restart.
+- `kt` works only for a tweak that is on, or has a script running, and whose needs the driver
+  agreed to. When a tweak goes off its uid's processes are killed, after `disable.sh` too.
 - `kt` steps run as root in `cabinwrightd`.
 - A `kt` call outside the tweak's needs fails with exit 70 and is logged; the tweak goes to
   `error` with "Tried something it didn't declare".
@@ -177,9 +183,9 @@ prints `service call`'s own output (`Result: Parcel(…)`).
 
 ### Safe mode
 
-The runner counts boots in `/data/nemesis/cabinwright/boots`. If the head unit starts three
-times within ten minutes of the last change to a tweak with a `file:` need, the runner replays
-that tweak's journal, pauses all `file:` tweaks, and the Tweaks app and store show "Safe mode:
+After a change to a tweak with a `file:` need, the runner counts head unit starts that end within
+three minutes (`short_boots` in `state.json`; the car's clock can't be trusted across a boot). After
+three in a row, the runner replays the journals of the tweaks with file changes, pauses them, and the Tweaks app and store show "Safe mode:
 system tweaks were turned off after repeated restarts", with a button to resume.
 
 ## Capabilities and the broker
@@ -239,7 +245,7 @@ Operations:
 | `tweaks` | `set` | `{id, on}` → `{}`; turning on a tweak with needs the driver hasn't agreed to fails `not_granted` (the Tweaks app sends the driver to the store's confirmation) |
 | `tweaks` | `log` | `{id}` → `{lines}` |
 | `logs` | `read` | `{filter?, lines?}` → `{lines}` |
-| `settings` | `get`/`put` | `{table, name, value?}` |
+| `settings` | `get` | `{table, name}` → `{value}`. `put` isn't built, and the allowlist is empty until an app needs an entry |
 | `root` | `exec` | `{command, timeout_ms?}` → `{code, stdout, stderr}` |
 | `store` | `install` | `{id, version}` → `{request_id}`. The app calls it only after the driver confirmed the version's capabilities and needs (from the verified index); that confirmation is the agreement. The daemon reads `index.json`, `index.json.sig` and `downloads/<id>-<version>.zip` from `/sdcard/cabinwright/store/` |
 | `store` | `uninstall` | `{id}` → `{request_id}`; only packages the store installed |
@@ -268,9 +274,10 @@ The broker asks the store app to show a prompt by starting its non-exported `Pro
 with the request id); the store app answers with `store/prompt_answer`. Unanswered prompts
 expire after 60 s as `denied` for that request only.
 
-**Parked** means the gear is P, read by `cabinwrightd` from the head unit's vehicle service
-(`com.hkmc.micom.*`, the service CarPlay uses for `GearStatus`; name and transaction code to
-be confirmed on the car). If the gear can't be read, the car counts as not parked.
+**Parked** means the gear is P: `cabinwrightd` calls `getGearPStatus` on `com.hkmc.micom.system`,
+finding the code by name in the car's own framework, and 1 means Park (seen on an Ioniq 5; to be
+confirmed on the EV6). `vehicle.json` can override the probe. If the gear can't be read, the car
+counts as not parked.
 
 ## Index
 
@@ -287,11 +294,18 @@ after 90 days, so a stale copy can't be replayed for long.
 ## Lockdown
 
 A head unit isn't built for installing whatever its owner likes. A store that adds third-party
-apps should be careful about who can reach NEMESIS's root access, so Cabinwright narrows that
-path: apps reach root only through `cabinwrightd`, with the driver's permission. Lockdown is on by
-default, the store's settings page shows it with a switch, and turning it off or removing the
-store restores NEMESIS's own defaults. A restart is the USB rescue. The details are being
-settled with NEMESIS's maintainer.
+apps should be careful about who can reach NEMESIS's root access, so Cabinwright means to narrow
+that path: apps reach root only through `cabinwrightd`, with the driver's permission. Turning it
+off or removing the store would restore NEMESIS's own defaults, and a restart is the USB rescue.
+
+**It can't be enforced from outside NEMESIS, so it is off and can't be turned on.** A caller that
+isn't root doesn't use the setuid bit at all: `nemesis` hands the command to NEMESIS's own daemon
+over a socket, so a mode change on the binary doesn't stop it, and any app can speak that protocol
+itself. Every `nemesis` command run as root also sets the binary back to 04755, as do its boot
+hooks. It needs NEMESIS to check its callers, which is being settled with NEMESIS's maintainer.
+Until then `store/status` reports `lockdown: false`, `store/lockdown {on: true}` answers
+`unsupported`, and any app can still reach root without the broker. The switch stays honest rather
+than showing protection the car doesn't have.
 
 ## Files on the car
 
@@ -303,7 +317,7 @@ settled with NEMESIS's maintainer.
 | `/data/nemesis/cabinwright/tweakdata/<tweak>/` | `$TWEAK_DATA` |
 | `/data/nemesis/cabinwright/log/` | broker and runner logs, rotated |
 | `/data/nemesis/cabinwright/debug-index` | test builds only: the URL of a debug index (root-only) |
-| `/data/nemesis/cabinwright/vehicle.json` | root-only: the gear probe for "parked" |
+| `/data/nemesis/cabinwright/vehicle.json` | root-only, optional: overrides the gear probe for "parked" |
 
 The daemon has no network access, so the store app downloads the index, its signature and
 package zips to `/sdcard/cabinwright/store/` and the daemon verifies them itself (signature,

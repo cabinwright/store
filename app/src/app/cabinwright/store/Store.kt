@@ -312,7 +312,7 @@ internal class Store(val context: Context) {
         val SYSTEM_IDS = setOf(SELF)
 
         /** Root-only to create; its first line is the debug index's base URL. */
-        val DEBUG_INDEX = File("/data/nemesis/cabinwright/store/debug-index")
+        val DEBUG_INDEX = File("/data/nemesis/cabinwright/debug-index")
         const val MAX_INDEX = 4 shl 20
         const val MAX_ZIP = 64L shl 20
         private const val MAX_SIG = 64 shl 10

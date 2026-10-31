@@ -26,18 +26,26 @@ object Kt {
         System.exit(call(args.toList()))
     }
 
+    @Suppress("NestedBlockDepth", "ReturnCount")
     private fun call(argv: List<String>): Int {
         val s = LocalSocket()
         try {
             s.connect(LocalSocketAddress(Wire.SOCKET))
-        } catch (e: IOException) {
+        } catch (ignored: IOException) {
             System.err.println("kt: Cabinwright's service isn't running")
             return NOT_RUNNING
         }
         try {
-            s.soTimeout = READ_TIMEOUT_MS
             val logcat = argv.size == 2 && argv[0] == "logcat"
-            Wire.write(s.outputStream, Json.of("v" to Wire.VERSION.toLong(), "cap" to "kt", "op" to if (logcat) "logcat" else "run", "args" to Json.of("argv" to ArrayList<Any?>(argv))))
+            s.soTimeout = if (logcat) 0 else READ_TIMEOUT_MS // a quiet tag can be quiet for hours
+            val op = if (logcat) "logcat" else "run"
+            val request = Json.of(
+                "v" to Wire.VERSION.toLong(),
+                "cap" to "kt",
+                "op" to op,
+                "args" to Json.of("argv" to ArrayList<Any?>(argv)),
+            )
+            Wire.write(s.outputStream, request)
             if (logcat) {
                 while (true) {
                     val m = Wire.read(s.inputStream)
@@ -93,5 +101,6 @@ object Kt {
     }
 
     private fun bootClasspath(): String = System.getenv("BOOTCLASSPATH")
-        ?: "/system/framework/core.jar:/system/framework/conscrypt.jar:/system/framework/okhttp.jar:/system/framework/core-junit.jar:/system/framework/bouncycastle.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/framework2.jar"
+        ?: listOf("core", "conscrypt", "okhttp", "core-junit", "bouncycastle", "ext", "framework", "framework2")
+            .joinToString(":") { "/system/framework/$it.jar" }
 }

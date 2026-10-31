@@ -16,8 +16,9 @@ object Runner {
         fun script(name: String) = File(dir, name)
     }
 
-    private const val FIRST_UID = 99000
-    private const val LAST_UID = 99999
+    // not 99000 and up: those are Android's isolated processes, which any app can start
+    private const val FIRST_UID = 90000
+    private const val LAST_UID = 98999
     private const val SCRIPT_TIMEOUT_MS = 5 * 60 * 1000L
     private const val STATUS_TIMEOUT_MS = 20 * 1000L
     private const val STATUS_EVERY_MS = 60 * 1000L
@@ -26,13 +27,29 @@ object Runner {
     private const val SHORT_BOOTS = 3
     private const val LOG_MAX = 256 shl 10
     private const val UNDECLARED = 70
+    private const val KILL_ROUNDS = 5
+    private const val POLL_MS = 100L
+
+    /** The host test's commands; nothing on the car. */
+    private val TEST_PATH = if (Paths.ROOT.isEmpty()) "" else ":" + System.getenv("PATH")
 
     private val wake = Object()
+
+    /** One thing at a time turns tweaks on or off: the rounds here, and the installer before a removal. */
+    private val turning = Any()
     private var known: Map<String, Tweak> = HashMap()
     private val services = HashMap<String, Process>()
     private val serviceStarts = HashMap<String, MutableList<Long>>()
-    private val status = HashMap<String, Pair<Long, String>>()
+    private val status = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>>()
     private var lastNemesisBusy = 0L
+
+    /** Tweaks with a script running now: only these, and applied ones, may use kt. */
+    private val active = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Tweaks in their disable.sh, the one place `kt keep` works. */
+    private val inDisable = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    fun disabling(id: String) = inDisable.containsKey(id)
 
     /** Live progress and errors per tweak, for `tweaks/list`. */
     private val shown = HashMap<String, Pair<String, String>>()
@@ -43,10 +60,12 @@ object Runner {
         boot()
         while (true) {
             try {
-                round()
+                synchronized(turning) { round() }
             } catch (e: IOException) {
                 log("runner: $e")
             } catch (e: IllegalStateException) {
+                log("runner: $e")
+            } catch (e: IllegalArgumentException) {
                 log("runner: $e")
             }
             synchronized(wake) { wake.wait(5000) }
@@ -57,6 +76,7 @@ object Runner {
 
     fun tweaks(): Map<String, Tweak> = synchronized(this) { known }
 
+    @Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements")
     private fun discover(): Map<String, Tweak> {
         val out = java.util.TreeMap<String, Tweak>()
         val packages = synchronized(State.lock) { HashMap(State.packages()) }
@@ -68,7 +88,7 @@ object Runner {
                 if (out.containsKey(d.name)) continue // the first package with an id wins
                 val conf = try {
                     TweakConf(readText(File(d, "tweak.conf"), 64 shl 10))
-                } catch (e: IOException) {
+                } catch (ignored: IOException) {
                     continue
                 } catch (e: IllegalArgumentException) {
                     log("tweak ${d.name} in $pkg: ${e.message}")
@@ -86,9 +106,13 @@ object Runner {
 
     fun forUid(uid: Int): Tweak? {
         val id = synchronized(State.lock) {
-            State.tweaks().entries.firstOrNull { Json.num(Json.obj(State.tweaks(), it.key), "uid", -1) == uid.toLong() }?.key
+            State.tweaks().entries.firstOrNull {
+                Json.num(Json.obj(State.tweaks(), it.key), "uid", -1) == uid.toLong()
+            }?.key
         } ?: return null
-        return tweaks()[id]
+        val t = tweaks()[id] ?: return null
+        val live = active.containsKey(id) || Json.bool(State.tweak(id), "applied")
+        return if (live && t.agreed) t else null
     }
 
     // ------------------------------------------------------------------ boot and safe mode
@@ -112,7 +136,17 @@ object Runner {
                 State.save()
             }
         }
+        root("$NEMESIS remount ro") // a daemon killed mid-write leaves it writable
+        finishInterrupted()
         if (State.flag("safe_mode")) pauseFileTweaks()
+    }
+
+    /** A tweak whose enable.sh was cut off is undone, and the next round turns it on properly. */
+    private fun finishInterrupted() {
+        known = discover()
+        for ((id, t) in known) {
+            if (Json.bool(State.tweak(id), "enabling")) off(t, "")
+        }
     }
 
     private fun pauseFileTweaks() {
@@ -154,6 +188,7 @@ object Runner {
 
     // ------------------------------------------------------------------ one round
 
+    @Suppress("CyclomaticComplexMethod")
     private fun round() {
         stableCheck()
         val found = discover()
@@ -161,15 +196,20 @@ object Runner {
         if (nemesisBusy()) lastNemesisBusy = System.currentTimeMillis()
         removeGone(found)
         val safe = State.flag("safe_mode")
+        val firmware = Car.firmware()
         // offs first, then ons, so a conflicting pair can swap in one round
         for (t in found.values) {
             val st = State.tweak(t.id)
-            val want = Json.bool(st, "desired") && !Json.bool(st, "paused")
+            val want = Json.bool(st, "desired") && !Json.bool(st, "paused") && t.agreed && t.conf.fits(firmware)
             if (!want && Json.bool(st, "applied")) off(t, "")
         }
         for (t in found.values) {
             val st = State.tweak(t.id)
-            val want = Json.bool(st, "desired") && !Json.bool(st, "paused") && !(safe && t.conf.changesFiles())
+            val want = Json.bool(st, "desired") &&
+                !Json.bool(st, "paused") &&
+                t.agreed &&
+                t.conf.fits(firmware) &&
+                !(safe && t.conf.changesFiles())
             if (!want) continue
             val applied = Json.bool(st, "applied")
             if (applied && t.conf.kind == "oneshot" && Json.str(st, "enable_md5") != scriptMd5(t, "enable.sh")) {
@@ -206,7 +246,10 @@ object Runner {
         val t = tweaks()[id] ?: return "bad_request" to "There's no tweak $id."
         if (on) {
             if (!t.agreed) return "not_granted" to "${t.conf.name} needs your agreement in the store first."
-            if (!t.conf.fits(Car.firmware())) return "unsupported" to "${t.conf.name} isn't made for this head unit's software."
+            if (!t.conf.fits(Car.firmware())) {
+                return "unsupported" to
+                    "${t.conf.name} isn't made for this head unit's software."
+            }
         }
         synchronized(State.lock) {
             State.tweak(id)["desired"] = on
@@ -224,7 +267,10 @@ object Runner {
             return
         }
         val uid = uidFor(t.id)
-        prepareData(t.id, uid)
+        if (!prepareData(t.id, uid)) {
+            show(t.id, "error", "Its private folder belongs to something else")
+            return
+        }
         if (t.conf.changesFiles()) {
             synchronized(State.lock) {
                 State.get()["changed_since_stable"] = true
@@ -238,15 +284,30 @@ object Runner {
             return
         }
         show(t.id, "working", "Turning on")
+        synchronized(KtOps.undeclared) { KtOps.undeclared.remove(t.id) }
+        // applied from now on, so its changes can be undone even if this is cut off
+        markApplied(t, true)
+        synchronized(State.lock) {
+            State.tweak(t.id)["enabling"] = true
+            State.save()
+        }
         val r = script(t, uid, "enable.sh", SCRIPT_TIMEOUT_MS)
+        synchronized(State.lock) {
+            State.tweak(t.id).remove("enabling")
+            State.save()
+        }
         if (r.code == 0) {
-            markApplied(t, true)
             show(t.id, "", "")
             tweakLog(t.id, "turned on")
         } else {
-            val why = if (r.code == UNDECLARED) "Tried something it didn't declare" else lastLine(r.out).ifEmpty { "Turning on failed (exit ${r.code})" }
+            val why = if (r.code ==
+                UNDECLARED
+            ) {
+                "Tried something it didn't declare"
+            } else {
+                lastLine(r.out).ifEmpty { "Turning on failed (exit ${r.code})" }
+            }
             tweakLog(t.id, "turning on failed: $why")
-            markApplied(t, true)
             off(t, why)
             synchronized(State.lock) {
                 State.tweak(t.id)["desired"] = false
@@ -263,20 +324,46 @@ object Runner {
         stopService(t.id)
         val uid = uidFor(t.id)
         if (t.script("disable.sh").isFile) {
+            inDisable[t.id] = true
             val r = script(t, uid, "disable.sh", SCRIPT_TIMEOUT_MS)
+            inDisable.remove(t.id)
             if (r.code != 0) tweakLog(t.id, "disable.sh: exit ${r.code}")
         }
+        killUid(uid) // whatever it left in the background must not outlive the undo
         val problems = Journal.undo(t.id)
         markApplied(t, false)
         tweakLog(t.id, "turned off" + if (problems.isEmpty()) "" else ": " + problems.joinToString("; "))
-        show(t.id, if (problems.isEmpty() && why.isEmpty()) "" else "error", if (problems.isEmpty()) why else problems.joinToString("; "))
+        show(
+            t.id,
+            if (problems.isEmpty() &&
+                why.isEmpty()
+            ) {
+                ""
+            } else {
+                "error"
+            },
+            if (problems.isEmpty()) why else problems.joinToString("; "),
+        )
         status.remove(t.id)
+    }
+
+    /** After [pkg] is updated: its running service tweaks stop, and the next round starts the new code. */
+    fun restartServices(pkg: String) = synchronized(turning) {
+        for (t in tweaks().values.filter { it.pkg == pkg && it.conf.kind == "service" }) stopService(t.id)
+        poke()
     }
 
     /** Turns off every tweak of [pkg], before the package is removed (disable.sh still exists then). */
     fun offPackage(pkg: String) {
-        for (t in tweaks().values.filter { it.pkg == pkg }) {
-            if (Json.bool(State.tweak(t.id), "applied")) off(t, "")
+        synchronized(turning) {
+            for (t in tweaks().values.filter { it.pkg == pkg }) {
+                if (Json.bool(State.tweak(t.id), "applied")) off(t, "")
+                // run.sh may be between rounds; the package is going, so don't start it again
+                synchronized(State.lock) {
+                    State.tweak(t.id)["desired"] = false
+                    State.save()
+                }
+            }
         }
     }
 
@@ -303,6 +390,7 @@ object Runner {
         if (starts.isNotEmpty() && now - starts.last() < 10_000L * starts.size) return // back off
         starts.add(now)
         val uid = uidFor(t.id)
+        killUid(uid) // an earlier daemon's copy keeps running across a restart
         val proc = ProcessBuilder(NEMESIS, "root", uid.toString(), "-c", scriptCommand(t, uid, "run.sh"))
             .redirectErrorStream(true).start()
         proc.outputStream.close()
@@ -331,8 +419,13 @@ object Runner {
 
     /** Everything running as a tweak's uid (its scripts and their children). */
     private fun killUid(uid: Int) {
-        val pids = Car.pidsOf(uid)
-        if (pids.isNotEmpty()) asUid(uid, "kill -9 " + pids.joinToString(" "))
+        // a few rounds: a script can fork while it's being killed
+        var rounds = KILL_ROUNDS
+        while (rounds-- > 0) {
+            val pids = Car.pidsOf(uid)
+            if (pids.isEmpty()) return
+            asUid(uid, "kill -9 " + pids.joinToString(" "))
+        }
     }
 
     private fun alive(p: Process): Boolean = try {
@@ -373,7 +466,11 @@ object Runner {
                 if (word in setOf("on", "off", "error")) state = word
                 text = report.substringAfter(' ', "")
             }
-            if (live != null && live.first.isNotEmpty()) {
+            val undeclared = synchronized(KtOps.undeclared) { KtOps.undeclared[t.id] }
+            if (undeclared != null) {
+                state = "error"
+                text = "Tried something it didn't declare: $undeclared"
+            } else if (live != null && live.first.isNotEmpty()) {
                 state = live.first
                 text = live.second
             } else if (live != null && live.second.isNotEmpty()) {
@@ -409,7 +506,9 @@ object Runner {
         val st = State.tweak(id)
         val have = Json.num(st, "uid", -1).toInt()
         if (have in FIRST_UID..LAST_UID) return have
-        val used = State.tweaks().values.mapNotNull { Json.asObject(it) }.map { Json.num(it, "uid", -1).toInt() }.toSet()
+        val used = State.tweaks().values.mapNotNull {
+            Json.asObject(it)
+        }.map { Json.num(it, "uid", -1).toInt() }.toSet()
         var next = Json.num(State.get(), "next_uid", FIRST_UID.toLong()).toInt()
         while (next in used || next > LAST_UID) next = if (next > LAST_UID) FIRST_UID else next + 1
         st["uid"] = next.toLong()
@@ -421,21 +520,39 @@ object Runner {
     private fun dataDir(id: String) = File(Paths.TWEAKDATA, id)
 
     /** $TWEAK_DATA: made by the tweak's own uid in the sticky tweakdata/ (the daemon can't chown). */
-    private fun prepareData(id: String, uid: Int) {
+    private fun prepareData(id: String, uid: Int): Boolean {
         val d = dataDir(id)
         val m = meta(d.path)
-        if (m != null && m.uid != uid) root("rm -rf " + q(d.path))
+        // tweakdata/ is sticky: only the owner can remove it, and the daemon may not have the caps
+        if (m != null && m.uid != uid) asUid(m.uid, "rm -rf " + q(d.path))
         if (meta(d.path) == null) asUid(uid, "mkdir " + q(d.path) + " && chmod 700 " + q(d.path))
+        // anyone can make a folder here first, so what counts is who owns it now
+        return Paths.ROOT.isNotEmpty() || meta(d.path)?.uid == uid
     }
 
     private fun scriptCommand(t: Tweak, uid: Int, name: String): String =
         "cd " + q(t.dir.path) + " && export TWEAK_ID=" + q(t.id) + " TWEAK_DIR=" + q(t.dir.path) +
-            " TWEAK_DATA=" + q(dataDir(t.id).path) + " TWEAK_UID=$uid PATH=" + q(Kt.BIN.path + ":/system/bin:/system/xbin") +
+            " TWEAK_DATA=" + q(dataDir(t.id).path) + " TWEAK_UID=$uid PATH=" +
+            q(Kt.BIN.path + ":/system/bin:/system/xbin" + TEST_PATH) +
             " && exec sh ./" + name
 
     private fun script(t: Tweak, uid: Int, name: String, timeoutMs: Long): Ran {
         if (!t.script(name).isFile) return Ran(0, ByteArray(0))
-        val p = ProcessBuilder(NEMESIS, "root", uid.toString(), "-c", scriptCommand(t, uid, name)).redirectErrorStream(true).start()
+        synchronized(active) { active[t.id] = (active[t.id] ?: 0) + 1 }
+        try {
+            return runScript(t, uid, name, timeoutMs)
+        } finally {
+            synchronized(active) {
+                val left = (active[t.id] ?: 1) - 1
+                if (left > 0) active[t.id] = left else active.remove(t.id)
+            }
+        }
+    }
+
+    private fun runScript(t: Tweak, uid: Int, name: String, timeoutMs: Long): Ran {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val p = ProcessBuilder(NEMESIS, "root", uid.toString(), "-c", scriptCommand(t, uid, name))
+            .redirectErrorStream(true).start()
         p.outputStream.close()
         val out = java.io.ByteArrayOutputStream()
         val reader = Thread {
@@ -448,20 +565,27 @@ object Runner {
                 // killed
             }
         }
+        reader.isDaemon = true
         reader.start()
-        reader.join(timeoutMs)
-        if (reader.isAlive) {
+        // on the process, not its output: a script can close stdout and keep going
+        var code: Int? = exitOf(p)
+        while (code == null && System.currentTimeMillis() < deadline) {
+            Thread.sleep(POLL_MS)
+            code = exitOf(p)
+        }
+        if (code == null) {
             tweakLog(t.id, "$name: still running after ${timeoutMs / 1000} s; stopped")
             killUid(uid)
             p.destroy()
-            reader.join(5000)
         }
-        val code = try {
-            p.waitFor()
-        } catch (ignored: InterruptedException) {
-            -1
-        }
-        return Ran(code, synchronized(out) { out.toByteArray() })
+        reader.join(POLL_MS)
+        return Ran(code ?: -1, synchronized(out) { out.toByteArray() })
+    }
+
+    private fun exitOf(p: Process): Int? = try {
+        p.exitValue()
+    } catch (ignored: IllegalThreadStateException) {
+        null
     }
 
     private fun scriptMd5(t: Tweak, name: String): String = try {
@@ -495,7 +619,8 @@ object Runner {
         for (d in listOf(Paths.JOURNAL, Paths.BACKUP, Paths.LOG, Paths.WORK, Paths.TWEAKDATA, Paths.KT)) d.mkdirs()
         // tweak uids may pass through the base, and make their own folder in tweakdata/
         root(
-            "chmod 711 " + Paths.BASE + " && chmod 700 " + listOf(Paths.JOURNAL, Paths.BACKUP, Paths.LOG, Paths.WORK).joinToString(" ") { it.path } +
+            "chmod 711 " + Paths.BASE + " && chmod 700 " +
+                listOf(Paths.JOURNAL, Paths.BACKUP, Paths.LOG, Paths.WORK).joinToString(" ") { it.path } +
                 " && chmod 1733 " + Paths.TWEAKDATA.path + " && chmod 755 " + Paths.KT.path,
         )
         // packages' tweak folders and libraries are readable by tweak uids, nothing more

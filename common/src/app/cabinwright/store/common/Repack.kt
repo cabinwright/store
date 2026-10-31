@@ -15,6 +15,7 @@ object Repack {
     val SYSTEM_IDS = setOf("cabinwright.store")
 
     private val TWEAK_ID = Regex("^[a-z0-9]+(-[a-z0-9]+)*$")
+    private val APK_NAME = Regex("^[A-Za-z0-9._-]+\\.apk$")
 
     /** One APK of the rebuilt package. */
     class Apk(val path: String, val pkg: String, val component: String)
@@ -97,7 +98,8 @@ object Repack {
         return b.toString()
     }
 
-    private fun isTopApk(e: String): Boolean = e.endsWith(".apk") && !e.contains('/')
+    // NEMESIS puts path= in a shell command (pm install -r "<path>"), so a name is never more than this
+    private fun isTopApk(e: String): Boolean = APK_NAME.matches(e)
 
     private fun tweakId(e: String): String = e.substring("tweaks/".length).substringBefore('/')
 
