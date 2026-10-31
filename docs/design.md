@@ -99,6 +99,7 @@ Each `need=` line is `<need> | <reason>`, the reason in plain words for the driv
 | `logs:<tag>` | read that log tag | `kt logcat <tag>:<priority>` |
 | `dump:<service>` | read that binder service's state | `kt dump <service>` |
 | `binder:<service> <codes>` | those binder transaction codes | `kt binder <service> <code> <args…>` (`service call` syntax) |
+| `binder:<service> <codes>` | a request answered through a listener, when the add, remove and request codes are all declared | `kt listen <service> <add> <remove> <request> <listener descriptor> <callback>`: prints the callback's 32-bit words |
 | `root` | anything (red warning; first-party review only) | `kt root <command>` |
 
 Reads need no declaration: `kt prop get`, `kt setting get`, `kt file md5 <path>`, `kt ps`.
