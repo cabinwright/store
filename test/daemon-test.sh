@@ -4,14 +4,14 @@
 # client say what uid it is playing, and `nemesis` is a script; packages, APK signatures and the
 # index signature are real. What it can't show: real sockets, SO_PEERCRED, NEMESIS, the car.
 #   CABINWRIGHT_APPS=<apps checkout>   default ../apps (needs the v1 branch)
-#   CABINWRIGHT_MENU=<menu checkout>   default ../menu (needs the v1 branch)
+#   CABINWRIGHT_SDK=<menu checkout>   default ../menu (needs the v1 branch)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$HERE/..
 APPS=${CABINWRIGHT_APPS:-$ROOT/../apps}
-CABINWRIGHT_MENU=${CABINWRIGHT_MENU:-$ROOT/../menu}
+CABINWRIGHT_SDK=${CABINWRIGHT_SDK:-$ROOT/sdk}
 JDK=${JAVA_HOME:-$(/usr/libexec/java_home -v 11)}
-FT=$(sh "$CABINWRIGHT_MENU/api/tools/fetch-tools.sh")
+FT=$(sh "$CABINWRIGHT_SDK/api/tools/fetch-tools.sh")
 BT=${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools/${BUILD_TOOLS:-29.0.2}
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT

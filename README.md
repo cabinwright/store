@@ -40,14 +40,14 @@ see "Lockdown" in the design.
 ## Build
 
 ```sh
-CABINWRIGHT_MENU=../menu sh build.sh     # -> dist/cabinwright.store.zip, and R8's name maps
-CABINWRIGHT_MENU=../menu sh test/test.sh
-sh ../menu/api/tools/lint.sh .           # ktlint, detekt, ShellCheck; --fix reformats the Kotlin
+sh build.sh     # -> dist/cabinwright.store.zip, and R8's name maps
+sh test/test.sh
+sh sdk/api/tools/lint.sh .           # ktlint, detekt, ShellCheck; --fix reformats the Kotlin
 ```
 
-Needs the Android SDK's build-tools 29.0.2, JDK 11, and a checkout of
-[cabinwright/menu](https://github.com/cabinwright/menu) (CI pins a release tag): its
-`api/tools/fetch-tools.sh` brings the pinned Kotlin, R8, Android 4.4's `android.jar` and the
+Needs the Android SDK's build-tools 29.0.2, JDK 11, and the
+[cabinwright/sdk](https://github.com/cabinwright/sdk) submodule (`git submodule update --init`):
+its `api/tools/fetch-tools.sh` brings the pinned Kotlin, R8, Android 4.4's `android.jar` and the
 lint tools, and its `build-app.sh` builds the app. `DEBUG=1` also pins the test key in
 `keys/test/` for a local debug index (`tools/debug-index.py`).
 

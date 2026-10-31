@@ -203,6 +203,8 @@ system tweaks were turned off after repeated restarts", with a button to resume.
 | `tweaks` | list tweaks, read their status and log, switch them | no |
 | `logs` | read logcat | yes |
 | `settings` | change the settings and properties on the store's allowlist | no |
+| `vehicle` | read whether the car is parked and ready, and its battery levels | no |
+| `conditioning` | start and stop battery conditioning, including while driving | no |
 | `root` | run commands as root; every command logged | yes, always red |
 
 Index fields the store reads, per version: `tier`, `capabilities` (`{cap: reason}`), and
@@ -221,6 +223,16 @@ zip's tweak.conf files). A version without `tier` isn't installed. An index entr
   app's log in the store.
 - **Bound to the package and its certificate.** Grants end when the app is removed, and are
   dropped if an update is signed with a different certificate.
+
+### Vehicle
+
+`vehicle` and `conditioning` give apps typed operations instead of binder codes, so no app holds
+the codes or needs `root`. Both work only on firmware the daemon lists, and neither prompts,
+because conditioning is started on the road. A conditioning session belongs to the daemon: it
+refreshes the request every 5 seconds whether or not the app is open. A session is `waiting`
+until the car's own indicator says `active`, and ends (`ended`: `stopped`, `finished`,
+`not_ready`, `timeout`, `failed`) when the driver stops it, the car finishes, the car stops being
+ready, or 5 minutes pass with no `active`. A daemon that finds a session it didn't start ends it.
 
 ### Protocol
 
