@@ -6,7 +6,7 @@
 # from keys/*.pub.pem. The tools (Kotlin, R8, android-19.jar) come from the menu checkout's
 # api/tools/fetch-tools.sh.
 #   DEBUG=1 ./build.sh   also pins keys/test/*.pub.pem, for a debug index (tools/debug-index.py)
-#   CABINWRIGHT_MENU=<menu checkout>   default ../menu
+#   CABINWRIGHT_SDK=<menu checkout>   default ../menu
 # Writes dist/cabinwright.store.zip, and R8's name maps for reading stack traces (retrace):
 # dist/cabinwright.store.map (the app) and dist/cabinwright.store.daemon.map (the daemon).
 # Install over ADB:
@@ -14,8 +14,8 @@
 #   adb shell "nemesis install --update /data/local/tmp/cabinwright.store.zip"
 set -e
 ROOT=$(cd "$(dirname "$0")" && pwd)
-CABINWRIGHT_MENU=${CABINWRIGHT_MENU:-$ROOT/../menu}
-TOOLS=$CABINWRIGHT_MENU/api/tools
+CABINWRIGHT_SDK=${CABINWRIGHT_SDK:-$ROOT/sdk}
+TOOLS=$CABINWRIGHT_SDK/api/tools
 JDK=${JAVA_HOME:-$(/usr/libexec/java_home -v 11)}
 FT=$(sh "$TOOLS/fetch-tools.sh")
 JAR=$FT/android-19.jar   # the head unit's API level: anything newer won't compile
