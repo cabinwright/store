@@ -31,6 +31,7 @@ object Runner {
     private const val POLL_MS = 100L
 
     /** The host test's commands; nothing on the car. */
+    private const val CHMOD_BATCH = 50
     private val TEST_PATH = if (Paths.ROOT.isEmpty()) "" else ":" + System.getenv("PATH")
 
     private val wake = Object()
@@ -57,7 +58,11 @@ object Runner {
     fun poke() = synchronized(wake) { wake.notifyAll() }
 
     fun run() {
-        boot()
+        try {
+            boot()
+        } catch (e: IOException) {
+            log("runner: $e")
+        }
         while (true) {
             try {
                 synchronized(turning) { round() }
@@ -76,32 +81,43 @@ object Runner {
 
     fun tweaks(): Map<String, Tweak> = synchronized(this) { known }
 
-    @Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements")
+    /** Throws when a package's tweaks can't be read: a tweak left out counts as removed, and is undone. */
     private fun discover(): Map<String, Tweak> {
         val out = java.util.TreeMap<String, Tweak>()
         val packages = synchronized(State.lock) { HashMap(State.packages()) }
         for (pkg in packages.keys.sorted()) {
-            val p = Json.asObject(packages[pkg]) ?: continue
-            if (Json.str(p, "tier") != "tweaks") continue
-            val root = File(Car.APPS, "$pkg/tweaks")
-            for (d in root.listFiles()?.sortedBy { it.name } ?: continue) {
-                if (out.containsKey(d.name)) continue // the first package with an id wins
-                val conf = try {
-                    TweakConf(readText(File(d, "tweak.conf"), 64 shl 10))
-                } catch (ignored: IOException) {
-                    continue
-                } catch (e: IllegalArgumentException) {
-                    log("tweak ${d.name} in $pkg: ${e.message}")
-                    continue
-                }
-                val agreed = Json.list(Json.obj(p, "needs"), d.name).mapNotNull { pair ->
-                    val l = pair as? List<*> ?: return@mapNotNull null
-                    (l.getOrNull(0) as? String ?: "") to (l.getOrNull(1) as? String ?: "")
-                }
-                out[d.name] = Tweak(d.name, pkg, d, conf, agreed == conf.needs.map { it.spec to it.reason })
-            }
+            val p = Json.asObject(packages[pkg])
+            if (p != null && Json.str(p, "tier") == "tweaks") addTweaks(pkg, p, out)
         }
         return out
+    }
+
+    private fun addTweaks(pkg: String, p: Map<String, Any?>, out: MutableMap<String, Tweak>) {
+        val root = File(Car.APPS, "$pkg/tweaks")
+        val dirs = root.listFiles()
+        if (dirs == null && root.exists()) throw IOException("can't list $root")
+        for (d in dirs.orEmpty().sortedBy { it.name }) {
+            if (out.containsKey(d.name)) continue // the first package with an id wins
+            readTweak(pkg, p, d)?.let { out[d.name] = it }
+        }
+    }
+
+    private fun readTweak(pkg: String, p: Map<String, Any?>, d: File): Tweak? {
+        val file = File(d, "tweak.conf")
+        val conf = try {
+            TweakConf(readText(file, 64 shl 10))
+        } catch (e: IOException) {
+            if (file.exists()) throw e
+            return null
+        } catch (e: IllegalArgumentException) {
+            log("tweak ${d.name} in $pkg: ${e.message}")
+            return null
+        }
+        val agreed = Json.list(Json.obj(p, "needs"), d.name).mapNotNull { pair ->
+            val l = pair as? List<*> ?: return@mapNotNull null
+            (l.getOrNull(0) as? String ?: "") to (l.getOrNull(1) as? String ?: "")
+        }
+        return Tweak(d.name, pkg, d, conf, agreed == conf.needs.map { it.spec to it.reason })
     }
 
     fun forUid(uid: Int): Tweak? {
@@ -191,10 +207,16 @@ object Runner {
     @Suppress("CyclomaticComplexMethod")
     private fun round() {
         stableCheck()
-        val found = discover()
+        val found = try {
+            discover()
+        } catch (e: IOException) {
+            log("runner: skipping a round: " + e.message)
+            return
+        }
         synchronized(this) { known = found }
         if (nemesisBusy()) lastNemesisBusy = System.currentTimeMillis()
         removeGone(found)
+        applyDefaults(found)
         val safe = State.flag("safe_mode")
         val firmware = Car.firmware()
         // offs first, then ons, so a conflicting pair can swap in one round
@@ -217,10 +239,21 @@ object Runner {
                 on(t)
             } else if (!applied) {
                 on(t)
-            } else if (t.conf.kind == "service") {
+            } else if (hasService(t)) {
                 keepRunning(t)
             }
             refreshStatus(t, false)
+        }
+    }
+
+    /** default=on: on once the driver has agreed to its needs; after that the switch is theirs. */
+    private fun applyDefaults(found: Map<String, Tweak>) = synchronized(State.lock) {
+        for (t in found.values) {
+            val st = State.tweak(t.id)
+            if (t.agreed && t.conf.defaultOn && !st.containsKey("desired")) {
+                st["desired"] = true
+                State.save()
+            }
         }
     }
 
@@ -349,7 +382,7 @@ object Runner {
 
     /** After [pkg] is updated: its running service tweaks stop, and the next round starts the new code. */
     fun restartServices(pkg: String) = synchronized(turning) {
-        for (t in tweaks().values.filter { it.pkg == pkg && it.conf.kind == "service" }) stopService(t.id)
+        for (t in tweaks().values.filter { it.pkg == pkg && hasService(it) }) stopService(t.id)
         poke()
     }
 
@@ -376,6 +409,9 @@ object Runner {
     }
 
     // ------------------------------------------------------------------ services
+
+    /** A oneshot tweak may also ship run.sh, for a job that goes with its change. */
+    private fun hasService(t: Tweak): Boolean = t.conf.kind == "service" || t.script("run.sh").isFile
 
     private fun keepRunning(t: Tweak) {
         val p = synchronized(services) { services[t.id] }
@@ -630,10 +666,11 @@ object Runner {
     /** Makes a tweaks package's folders readable to tweak uids. */
     fun readable(pkg: String) {
         val base = File(Car.APPS, pkg)
-        root(
-            "chmod 755 " + q(base.path) + "; for d in tweaks lib; do [ -d " + q(base.path) +
-                "/\$d ] && chmod -R a+rX " + q(base.path) + "/\$d; done; true",
-        )
+        val all = listOf("tweaks", "lib").flatMap { File(base, it).walk().toList() }
+        // toolbox chmod takes octal modes only
+        val (dirs, files) = all.partition { it.isDirectory }
+        for (batch in (dirs + base).chunked(CHMOD_BATCH)) root("chmod 755 " + batch.joinToString(" ") { q(it.path) })
+        for (batch in files.chunked(CHMOD_BATCH)) root("chmod 644 " + batch.joinToString(" ") { q(it.path) })
     }
 
     private fun nemesisBusy(): Boolean = Car.pids().any { p ->

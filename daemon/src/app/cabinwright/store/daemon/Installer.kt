@@ -368,8 +368,9 @@ object Installer {
             "record" to record,
         )
         writeFile(Paths.PENDING, Json.write(pending).toByteArray(Charsets.UTF_8))
+        // the daemon's umask 077 would leave the package's APKs unreadable to PackageManager
         root(
-            "($NEMESIS $args > ${q(
+            "(umask 022; $NEMESIS $args > ${q(
                 logFile.path,
             )} 2>&1; echo \$? > ${q(rc.path)}.tmp; mv ${q(rc.path)}.tmp ${q(rc.path)}) </dev/null >/dev/null 2>&1 &",
         )

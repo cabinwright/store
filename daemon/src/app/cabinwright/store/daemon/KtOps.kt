@@ -67,7 +67,8 @@ object KtOps {
         return when (a[0]) {
             "md5" -> {
                 val path = args.firstOrNull() ?: return Out(USAGE, stderr = "usage: kt file md5 <path>")
-                if (!readablePath(t, path)) return refuse(t, "reading $path")
+                // a tweak may look for what other packages left behind: no answer, and no fault
+                if (!readablePath(t, path)) return Out(1, stderr = "kt: can't read $path")
                 val now = Journal.current(path)
                 Out(0, Journal.version(now) + "\n")
             }

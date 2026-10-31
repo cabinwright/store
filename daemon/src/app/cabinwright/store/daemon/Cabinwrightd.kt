@@ -4,8 +4,6 @@ import android.net.LocalServerSocket
 import android.net.LocalSocket
 import java.io.File
 import java.io.IOException
-import java.io.RandomAccessFile
-import java.nio.channels.FileLock
 
 /**
  * cabinwrightd: the one privileged process (design.md "Parts"), started by svc/cabinwrightd.sh
@@ -24,18 +22,16 @@ object Cabinwrightd {
     private val callers = HashMap<Int, Int>()
     private val deadlines = java.util.Timer("deadlines", true)
 
-    /** Held for as long as this process runs: NEMESIS can briefly run two copies across an update. */
-    private var lock: FileLock? = null
-
     @JvmStatic
     fun main(args: Array<String>) {
         File(Paths.BASE).mkdirs()
-        lock = RandomAccessFile(File(Paths.BASE, "daemon.lock"), "rw").channel.lock()
+        // first: NEMESIS can run two copies across an update, and only one may touch the car
+        val server = bind()
         log("cabinwrightd $VERSION running")
         daemon("runner") { Runner.run() }
         daemon("installer") { Installer.run() }
         daemon("reload") { watchForUpdate() }
-        serve()
+        serve(server)
     }
 
     private fun daemon(name: String, body: () -> Unit) {
@@ -61,19 +57,20 @@ object Cabinwrightd {
     }
 
     private fun bind(): LocalServerSocket {
+        var told = false
         while (true) {
             try {
                 return LocalServerSocket(app.cabinwright.store.common.Wire.SOCKET)
             } catch (e: IOException) {
-                log("broker: can't take the socket yet: " + e.message)
+                if (!told) log("broker: waiting for the socket: " + e.message)
+                told = true
                 Thread.sleep(BIND_RETRY_MS)
             }
         }
     }
 
     @Suppress("LoopWithTooManyJumpStatements")
-    private fun serve() {
-        val server = bind()
+    private fun serve(server: LocalServerSocket) {
         log("broker listening")
         while (true) {
             val s = server.accept()
@@ -140,11 +137,23 @@ object Cabinwrightd {
         }
     }
 
+    /**
+     * On Android 4.4 LocalSocket.close() leaves an accepted socket open: LocalSocketImpl closes
+     * only what it created itself, and accept() doesn't mark its socket so. So the descriptor is
+     * closed here, the way LocalSocketImpl does it.
+     */
     private fun close(s: LocalSocket) {
+        val fd = s.fileDescriptor
         try {
             s.close()
         } catch (ignored: IOException) {
             // already gone
+        }
+        try {
+            val os = Class.forName("libcore.io.Libcore").getField("os").get(null)
+            Class.forName("libcore.io.Os").getMethod("close", java.io.FileDescriptor::class.java).invoke(os, fd)
+        } catch (ignored: ReflectiveOperationException) {
+            // already closed, or not this Android
         }
     }
 

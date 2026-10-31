@@ -61,7 +61,7 @@ in its private directory:
 3. It installs the rebuilt zip and records the APKs' signing certificates (SHA-256 of the
    first certificate) for the broker.
 
-A tweak's files are made readable to tweak uids (`chmod -R a+rX` on the folder) and nothing
+A tweak's files are made readable to tweak uids (folders 755, files 644) and nothing
 in a package is executable except through the runner.
 
 ## Tweaks
@@ -101,6 +101,8 @@ Each `need=` line is `<need> | <reason>`, the reason in plain words for the driv
 | `root` | anything (red warning; first-party review only) | `kt root <command>` |
 
 Reads need no declaration: `kt prop get`, `kt setting get`, `kt file md5 <path>`, `kt ps`.
+`kt file md5` answers for `/system`, `/vendor`, `/data/nemesis/backup` and the tweak's declared
+files; anywhere else it fails without counting against the tweak.
 
 Details of the `kt` commands:
 
@@ -120,7 +122,7 @@ Details of the `kt` commands:
   turning the tweak off restores it. The `<original>` file must be one of the need's declared
   versions; cabinwrightd reads it as root. `kt prop adopt` does nothing if this tweak already
   recorded that property.
-- `kt logcat <tag>:<priority>` streams that tag's lines until the caller exits (one connection,
+- `kt logcat <tag>:<priority>` streams that tag's lines, starting with those already in the log, until the log ends or the caller exits (one connection,
   frames until it closes).
 - `kt kill`: NEMESIS gives services root without CAP_KILL, so cabinwrightd sends the signal as
   the target process's own uid.
@@ -151,7 +153,10 @@ prints `service call`'s own output (`Result: Parcel(…)`).
 
 - **oneshot:** on → `enable.sh`; off → `disable.sh` if present, then the journal is replayed
   for whatever is left. `status.sh` (optional) prints `on|off|error <text>`; without it the
-  runner reports from the journal.
+  runner reports from the journal. A `run.sh` beside `enable.sh` runs while the tweak is on, as
+  a service tweak's does, for a job that goes with the change.
+- **`default=on`:** the tweak turns on by itself once the driver has agreed to its needs at
+  install. After that the switch is theirs.
 - **service:** on → `run.sh` runs while the switch is on; off → it is stopped, `disable.sh`
   runs if present, then its journal is replayed.
 - Scripts run as the tweak's own uid, allocated by the runner from 90000–98999 (unused on

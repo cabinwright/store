@@ -94,7 +94,11 @@ object Kt {
                 " /system/bin/app_process /system/bin " + Kt::class.java.name + " --warm"
             val r = sh(warm)
             if (!r.ok) log("kt: warming its dalvik-cache failed: " + r.out.trim())
-            root("chmod -R a+rX " + q(DIR.path) + " && chmod 755 " + q(File(BIN, "kt").path))
+            // toolbox chmod takes octal modes only
+            val dirs = listOf(DIR, BIN, DATA, File(DATA, "dalvik-cache")).joinToString(" ") { q(it.path) }
+            val dex = File(DATA, "dalvik-cache").listFiles().orEmpty().toList()
+            val files = (dex + JAR).joinToString(" ") { q(it.path) }
+            root("chmod 755 $dirs " + q(File(BIN, "kt").path) + " && chmod 644 $files")
         } catch (e: IOException) {
             log("kt: can't prepare: " + e.message)
         }

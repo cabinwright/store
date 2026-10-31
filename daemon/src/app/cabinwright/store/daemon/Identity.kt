@@ -29,6 +29,7 @@ object Identity {
     private val XML = File(Paths.ROOT + "/data/system/packages.xml")
     private const val MAX_LIST = 4 shl 20
     private const val MAX_XML = 32 shl 20
+    private const val SYSTEM_UID = 1000
     private var listStamp = -1L
     private var byUid: Map<Int, List<String>> = HashMap()
     private var xmlStamp = -1L
@@ -56,16 +57,25 @@ object Identity {
     private fun refresh() {
         try {
             if (LIST.lastModified() != listStamp) {
-                byUid = Callers.packagesByUid(readText(LIST, MAX_LIST))
+                byUid = Callers.packagesByUid(system(LIST, MAX_LIST))
                 listStamp = LIST.lastModified()
             }
             if (XML.lastModified() != xmlStamp) {
-                xml = readText(XML, MAX_XML)
+                xml = system(XML, MAX_XML)
                 xmlStamp = XML.lastModified()
             }
         } catch (e: IOException) {
             log("identity: " + e.message)
         }
+    }
+
+    /** Both files are system's: started without CAP_DAC_OVERRIDE (Sys.kt), only that uid reads them. */
+    private fun system(f: File, max: Int): String = try {
+        readText(f, max)
+    } catch (ignored: IOException) {
+        val r = asUid(SYSTEM_UID, "cat " + q(f.path), max = max)
+        if (!r.ok) throw IOException("can't read $f: " + r.out.trim())
+        r.out
     }
 
     private fun storeCert(): String {

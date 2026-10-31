@@ -223,7 +223,7 @@ object Broker {
             Wire.write(out, Wire.error(Wire.NOT_GRANTED, "$spec isn't declared by this tweak (need= in tweak.conf)"))
             return
         }
-        val p = ProcessBuilder(NEMESIS, "root", "-c", "logcat -v time -T 1 " + q(spec) + " '*:S'")
+        val p = ProcessBuilder(NEMESIS, "root", "-c", "logcat -v time " + q(spec) + " '*:S'")
             .redirectErrorStream(true).start()
         p.outputStream.close()
         val watcher = Thread {
@@ -238,6 +238,7 @@ object Broker {
         watcher.start()
         try {
             p.inputStream.bufferedReader().forEachLine { Wire.write(out, Wire.ok(Json.of("line" to it))) }
+            Wire.write(out, Wire.error(Wire.FAILED, "The log ended."))
         } finally {
             p.destroy()
         }

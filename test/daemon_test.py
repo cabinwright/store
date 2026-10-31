@@ -48,11 +48,20 @@ ROOT={R}
 case "$1" in
   root)
     shift
+    uid=$1
     [ "$1" = -c ] || shift
     shift
+    if [ "$uid" = 1000 ] && [ -f $ROOT/narrow ]; then
+      chmod 600 $ROOT/data/system/packages.*
+      sh -c "$1"
+      code=$?
+      chmod 000 $ROOT/data/system/packages.*
+      exit $code
+    fi
     exec sh -c "$1" ;;
   install)
     [ -f $ROOT/slow ] && sleep 4
+    [ "$(umask)" = 0022 ] || {{ echo "pm install failed: unreadable APK" >&2; exit 1; }}
     zip=$3
     id=$(unzip -p "$zip" NEMESIS.data | grep '^id=' | cut -d= -f2)
     rm -rf "$ROOT/data/nemesis/apps/$id"
@@ -70,10 +79,12 @@ case "$1" in
     done ;;
 esac
 """)
+    # the car's toolbox chmod: octal modes only
+    script(STUBS / "chmod", 'm=$1; [ "$m" = -R ] && m=$2\ncase "$m" in *[!0-7]*) echo "Bad mode"; exit 10 ;; esac\nexec /bin/chmod "$@"\n')
     script(STUBS / "getprop", 'echo CVEV.USA.0000.V015.012.260507\n')
     script(STUBS / "service", f'echo "$*" >> {R}/binder.log\necho "Result: Parcel(00000000 00000001   \'........\')"\n')
     script(STUBS / "am", f'echo "$*" >> {R}/am.log\n')
-    script(STUBS / "logcat", 'echo "I/x( 1): a log line"\n')
+    script(STUBS / "logcat", 'case "$*" in *-T*) echo "Unrecognized Option" >&2; exit 1 ;; esac\necho "I/x( 1): a log line"\n')  # Android 4.4's: no -T
 
 
 def apk(pkg, path):
@@ -134,7 +145,7 @@ def start():
     env = dict(os.environ, PATH=f"{STUBS}:{os.environ['PATH']}")
     log = open(W / "daemon.log", "a")
     daemon = subprocess.Popen([JAVA, f"-Dcabinwright.test.root={R}", f"-Dfake.port={PORT}", "-cp", CP, "app.cabinwright.store.daemon.Cabinwrightd"],
-                              env=env, stdout=log, stderr=log)
+                              env=env, stdout=log, stderr=log, preexec_fn=lambda: os.umask(0o077))  # as cabinwrightd.sh
     for _ in range(200):
         if PORT.exists() and PORT.read_text().strip():
             return
@@ -231,6 +242,11 @@ script(BASE / "kt/bin/kt", f'exec {JAVA} {PORT_ARG} -Dfake.uid="$TWEAK_UID" -cp 
 (BASE / "debug-index").write_text("test")
 start()
 
+print("what tweak uids need")
+time.sleep(1)
+check((BASE / "kt/bin").stat().st_mode & 0o777 == 0o755, "kt's folder is open to tweak uids despite the daemon's umask")
+check((BASE / "kt/bin/kt").stat().st_mode & 0o777 == 0o755, "and kt can be run")
+
 print("who's calling")
 h = call(STRANGER, "broker", "hello")
 check(h["ok"] and h["data"]["package"] == "", "hello answers anyone, and names no package for a stranger")
@@ -238,6 +254,19 @@ check(call(99, "store", "status")["error"] == "unknown_caller", "store ops refus
 check(call(APP_UID, "store", "status")["error"] == "unknown_caller", "store ops refuse an installed app that isn't the store")
 check(call(STRANGER, "root", "exec", {"command": "id"})["error"] == "unknown_caller", "root refuses a stranger")
 check(call(STRANGER, "kt", "run", {"argv": ["ps"]})["error"] == "unknown_caller", "kt refuses anything but a tweak uid")
+# started from ADB the daemon can't read system's files itself
+stop()
+(R / "narrow").touch()
+for f in ("packages.list", "packages.xml"):
+    (R / "data/system" / f).chmod(0)
+start()
+check(call(STORE_UID, "store", "status")["ok"], "without CAP_DAC_OVERRIDE the store is still recognised")
+check(call(STRANGER, "store", "status")["error"] == "unknown_caller", "and a stranger still isn't")
+stop()
+(R / "narrow").unlink()
+for f in ("packages.list", "packages.xml"):
+    (R / "data/system" / f).chmod(0o644)
+start()
 check(call(STORE_UID, "broker", "hello", v=99)["error"] == "unsupported", "an unknown protocol version is refused")
 check(store("status")["ok"], "the store app is recognised by its certificate")
 check(store("nonsense")["error"] == "unsupported", "unknown op")
@@ -350,6 +379,27 @@ publish([entry("example.tools", "1", tw, "tweaks", caps, NEEDS)], {"example.tool
 q = install("example.tools", "1")
 check(q["state"] == "ok", "a tweaks package installs: " + q["message"])
 check(wait(lambda: tweak("demo").get("agreed")), "its tweak is listed and agreed")
+auto = package("auto.zip", {"NEMESIS.data": "[nemesis]\nid=example.auto\nversion=1\n",
+                            "tweaks/auto/tweak.conf": "name=Auto\nsummary=s\ndescription=d\nfirmware=*\nkind=oneshot\ndefault=on\nneed=logs:demo | Reads a log\n",
+                            "tweaks/auto/enable.sh": "echo on\n",
+                            "tweaks/auto/run.sh": f"touch {R}/auto-ran\nkt logcat demo:E > {R}/auto-log 2>&1\necho $? > {R}/auto-log-done\nexec sleep 60\n"})
+publish([entry("example.tools", "1", tw, "tweaks", caps, NEEDS), entry("example.auto", "1", auto, "tweaks", {}, {"auto": [("logs:demo", "Reads a log")]})],
+        {"example.tools-1.zip": tw, "example.auto-1.zip": auto})
+check(install("example.auto", "1")["state"] == "ok", "a package of one default=on tweak installs")
+copy = subprocess.Popen([JAVA, f"-Dcabinwright.test.root={R}", f"-Dfake.port={PORT}", "-cp", CP, "app.cabinwright.store.daemon.Cabinwrightd"],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+time.sleep(3)
+copy.kill()
+said = copy.communicate()[0]
+check("waiting for the socket" in said and "running" not in said, "a second copy waits, and starts nothing")
+check(wait(lambda: tweak("auto").get("desired")), "default=on turns on by itself once agreed")
+check(wait(lambda: (R / "auto-ran").exists()), "a oneshot's run.sh runs while it's on")
+check(wait(lambda: (R / "auto-log-done").exists()), "kt logcat ends when the log does")
+check("a log line" in (R / "auto-log").read_text(), "and its lines reached the tweak")
+check(call(TWEAK_APP_UID, "tweaks", "set", {"id": "auto", "on": False})["ok"] and wait(lambda: tweak("auto").get("state") == "off"), "and the driver can turn it off")
+time.sleep(2)
+check(not tweak("auto").get("desired"), "a default doesn't turn it back on")
+store("uninstall", {"id": "example.auto"})
 check(call(TWEAK_APP_UID, "tweaks", "set", {"id": "nope", "on": True})["error"] == "bad_request", "no such tweak")
 check(call(TWEAK_APP_UID, "tweaks", "set", {"id": "demo", "on": True})["ok"], "switched on")
 ok = wait(lambda: (R / "binder.log").exists() and "com.hkmc.demo 3 i32 1" in (R / "binder.log").read_text())
@@ -357,6 +407,11 @@ check(ok, "enable.sh's declared binder call reached the car through kt")
 if not ok:
     print(call(TWEAK_APP_UID, "tweaks", "log", {"id": "demo"})["data"]["lines"])
 check(wait(lambda: tweak("demo").get("state") == "on"), "the tweak reports on")
+conf_file = APPS / "example.tools/tweaks/demo/tweak.conf"
+conf_file.chmod(0)
+time.sleep(3)
+conf_file.chmod(0o644)
+check(wait(lambda: tweak("demo").get("state") == "on"), "a tweak.conf that can't be read doesn't count as removed")
 state = json.loads((BASE / "state.json").read_text())
 uid = state["tweaks"]["demo"]["uid"]
 check(90000 <= uid <= 98999, f"its uid {uid} isn't one an app's isolated process can get")
@@ -367,6 +422,7 @@ def kt(*argv):
     return call(uid, "kt", "run", {"argv": list(argv)})
 
 
+check(kt("file", "md5", "/data/nemesis/elsewhere")["data"]["code"] == 1, "a read it can't make fails without counting against the tweak")
 check(kt("binder", "com.hkmc.demo", "9")["data"]["code"] == 70, "kt refuses a code the tweak didn't declare")
 check(kt("file", "replace", str(TARGET), str(W / "payload"), "6755")["data"]["code"] == 64, "kt won't make a setuid file")
 check(not TARGET.exists(), "and wrote nothing")

@@ -37,6 +37,10 @@ public class LocalSocket {
         return s.getOutputStream();
     }
 
+    public java.io.FileDescriptor getFileDescriptor() {
+        return null;
+    }
+
     public int getSoTimeout() throws IOException {
         return s.getSoTimeout();
     }
